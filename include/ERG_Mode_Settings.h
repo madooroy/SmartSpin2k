@@ -99,6 +99,10 @@ constexpr int ERG_CADENCE_FOLLOW_DEADBAND_RPM = 2;
 // Maximum cadence change proportional feedback compensates in one update; power feedback corrects any remainder.
 // A surge caused by a resistance drop must not immediately remove more resistance.
 constexpr int ERG_CADENCE_COMPENSATION_MAX_RPM = 3;
+// Fraction of the table-predicted cadence move applied by steady-state cadence compensation.
+// A full move on a 2 RPM change overshot power by 12-18 W in simulated and real steady efforts;
+// half the move lets power feedback finish the correction without the surge.
+constexpr double ERG_CADENCE_COMPENSATION_GAIN = 0.5;
 // Blend the measured cadence-curve estimate with the normal forward lookup.
 constexpr double ERG_TABLE_CURVE_BLEND = 0.5;
 // ******************************************************************************

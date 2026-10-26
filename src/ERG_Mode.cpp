@@ -950,7 +950,7 @@ int32_t ErgMode::_inSetpointState() {
     // Cap the compensation: a surge that the last resistance drop caused would otherwise remove more resistance at once.
     // _updateValues() refreshes the reference after a move, so power feedback corrects the remainder.
     const int cadenceDelta   = std::max(-ERG_CADENCE_COMPENSATION_MAX_RPM, std::min(ERG_CADENCE_COMPENSATION_MAX_RPM, cadence - cadenceReference));
-    const double cadenceMove = cadenceSlope * cadenceDelta;
+    const double cadenceMove = ERG_CADENCE_COMPENSATION_GAIN * cadenceSlope * cadenceDelta;
     const bool diverging     = measuredError * sustainedTrend < 0 && std::abs(sustainedTrend) >= ErgControl::ERG_TRANSIENT_MIN_TREND_WPS;
     // Delayed watts can still show a confirmed worsening residual. Do not
     // add resistance into a growing overshoot (or remove it into a growing

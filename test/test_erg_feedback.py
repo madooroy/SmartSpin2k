@@ -283,7 +283,8 @@ int main(int argc,char** argv) {
       step(29000,90);finalAt=30000;
     } else {step(27000,first);step(28000,second);}
     // Equal-watt measured rows give -150 steps/RPM. A two-RPM change
-    // therefore contributes exactly +/-300 steps when admitted by feedback.
+    // therefore predicts +/-300 steps, scaled by ERG_CADENCE_COMPENSATION_GAIN
+    // when admitted by feedback.
     const int cadence=under?(opposed||approaching?87:83):(opposed||approaching?83:87);
     rtConfig->cad.setValue(cadence);logs.clear();step(finalAt,last);
     const int highNegative[3]={-16,-26,-51}, highPositive[3]={15,25,50};
@@ -291,7 +292,8 @@ int main(int argc,char** argv) {
     const int recoveryNegative[3]={-23,-38,-76};
     const int pid=approaching?0:recovery?recoveryNegative[index]:under?(low?lowPositive[index]:highPositive[index]):(low?lowNegative[index]:highNegative[index]);
     const bool allowsCadence=!opposed;
-    const int expected=pid+(allowsCadence?(cadence==83?300:-300):0);
+    const int cadenceSteps=static_cast<int>(300*ERG_CADENCE_COMPENSATION_GAIN);
+    const int expected=pid+(allowsCadence?(cadence==83?cadenceSteps:-cadenceSteps):0);
     const int move=static_cast<int>(rtConfig->getTargetIncline())-motor.current;
     printf("%s: cadence85->%d residual%+d motor%+d expected%+d compensation%d\n",scenario.c_str(),cadence,target-last,move,expected,logged("Cadence compensation:"));fflush(stdout);
     assert(move==expected && !controller.isTableSeeking() && !logged("ERG feedback wait:"));
