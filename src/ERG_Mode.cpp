@@ -951,7 +951,9 @@ int32_t ErgMode::_inSetpointState() {
     // Cap the compensation: a surge that the last resistance drop caused would otherwise remove more resistance at once.
     // _updateValues() refreshes the reference after a move, so power feedback corrects the remainder.
     const int cadenceDelta   = std::max(-ERG_CADENCE_COMPENSATION_MAX_RPM, std::min(ERG_CADENCE_COMPENSATION_MAX_RPM, cadence - cadenceReference));
-    const double cadenceMove = ERG_CADENCE_COMPENSATION_GAIN * cadenceSlope * cadenceDelta;
+    // Stepped brakes (Grupetto feedback) apply a reduced share; other bikes keep the full move.
+    const double cadenceGain = _steppedFeedbackFresh() ? ERG_CADENCE_COMPENSATION_GAIN : 1.0;
+    const double cadenceMove = cadenceGain * cadenceSlope * cadenceDelta;
     const bool diverging     = measuredError * sustainedTrend < 0 && std::abs(sustainedTrend) >= ErgControl::ERG_TRANSIENT_MIN_TREND_WPS;
     // Delayed watts can still show a confirmed worsening residual. Do not
     // add resistance into a growing overshoot (or remove it into a growing
@@ -984,11 +986,15 @@ int32_t ErgMode::_inSetpointState() {
   return newIncline;
 }
 
-bool ErgMode::_steppedHold(int measuredError) {
+bool ErgMode::_steppedFeedbackFresh() const {
   // Only bikes reporting real stepped resistance (Grupetto on a Peloton Bike+) qualify.
   const auto resistance = rtConfig->resistance.getValueSample();
-  const bool stepped    = !resistance.simulate && resistance.timestamp != 0 && resistance.value > 0 &&
-                       static_cast<uint32_t>(millis()) - resistance.timestamp <= ERG_STEPPED_FEEDBACK_MAX_AGE_MS;
+  return !resistance.simulate && resistance.timestamp != 0 && resistance.value > 0 &&
+         static_cast<uint32_t>(millis()) - resistance.timestamp <= ERG_STEPPED_FEEDBACK_MAX_AGE_MS;
+}
+
+bool ErgMode::_steppedHold(int measuredError) {
+  const bool stepped = _steppedFeedbackFresh();
   // Never hold while a transition, table move or recovery still owns the knob.
   if (!stepped || transitionTarget != INT32_MIN || tableCorrectionNeedsProgress || abs(measuredError) >= ERG_STEPPED_IMMEDIATE_WATTS) {
     steppedErrorSign = 0;
