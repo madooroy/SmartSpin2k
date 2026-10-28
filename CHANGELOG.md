@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Automatically include changelog highlights and linked commits since the previous release tag in release notes, alongside GitHub's PR list; retain the full change list when rebuilding the same day's release.
 - Report the configured power-table collection position limit and observed travel/span in reset diagnostics; preserve the 250-step gate and collection behavior.
 - Improve high-power ERG acquisition and delayed-response braking, guard unsupported seek offsets and amended-seek handoffs, and anchor weak-row extrapolation to measured edges. Add compiled behavioral regression coverage for high targets and their low-power recoveries; hardware validation remains required.
+- Halve the steady-state cadence-compensation move (`ERG_CADENCE_COMPENSATION_GAIN = 0.5`) so a 1–2 RPM cadence change no longer causes a 12–18 W surge; power feedback finishes the correction. Transitions and seeks are unchanged.
+- On stepped-resistance bikes with live Grupetto resistance feedback (Peloton Bike+), hold steady-state ERG within ±4 W, correct 4–10 W errors only after they persist 1.5 s, and keep immediate correction at 10 W or more. Add an optional stepped-brake model to the ERG simulator. Ridden on a Bike+: 100% within ±7 W and zero resistance-level changes across Wannenhorn's steady intervals.
 
 ### Hardware
 
