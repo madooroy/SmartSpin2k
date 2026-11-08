@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The web server no longer sends permissive cross-origin (CORS) headers.
 - Status page debug log keeps the newest entries when full (it was discarding 10 of every 11 new lines after the first 1,000) and holds up to 6,000 lines so "Save Log" covers a whole ride; the page still renders the newest 1,000.
 - ESP32-S3: keep the web interface, DirCon and motor loop responsive while USB is plugged into a computer that is not reading the serial port. Serial log output is now dropped instead of waiting up to two seconds per write.
+- Stepped-resistance recovery drops (Peloton Bike+ via Grupetto) follow the cadence most recently held at the recovery target (about the last 20 s of settled riding) instead of a ~1 minute mean, so a change of riding style no longer sizes recoveries for the old cadence. One cadence spike moves it at most 3 rpm, and the held and typical cadence means round instead of truncating.
 
 ### Hardware
 
