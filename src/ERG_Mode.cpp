@@ -41,7 +41,7 @@ void ErgMode::prepareMode() {
   tableSeekFirstArrivalValid = false;
   tableSeekHadHighTarget     = false;
   pausedTargetWatts          = 0;
-  feedbackWaiting = tableSeekPidSeedValid = false;
+  feedbackWaiting = tableSeekPidSeedValid = tableSeekArrivedHandoff = false;
   tableCorrectionNeedsProgress            = false;
   mode                                    = Mode::MAINTAIN;
   cadenceReference                        = 0;
@@ -100,8 +100,10 @@ void ErgMode::runERG() {
     pausedTargetWatts = 0;
   }
 
-  if (tableSeekPidSeedValid && (rtConfig->getFTMSMode() != FitnessMachineControlPointProcedure::SetTargetPower || rtConfig->watts.getTarget() != tableSeekTargetWatts)) {
-    tableSeekPidSeedValid = false;
+  if ((tableSeekPidSeedValid || tableSeekArrivedHandoff) &&
+      (rtConfig->getFTMSMode() != FitnessMachineControlPointProcedure::SetTargetPower || rtConfig->watts.getTarget() != tableSeekTargetWatts)) {
+    tableSeekPidSeedValid   = false;
+    tableSeekArrivedHandoff = false;
   }
 
   _updateTableConfidence();
@@ -651,6 +653,7 @@ void ErgMode::_startTrustedTableSeek(int32_t position, int seekCadence) {
   tableSeekWattsTimestamp    = rtConfig->watts.getValueSample().timestamp;
   tableSeekDeadline          = _trustedTableMoveDeadline(position);
   tableSeekPidSeedValid      = false;
+  tableSeekArrivedHandoff    = false;
   tableSeekStartedAt         = millis();
   tableSeekFirstArrivalValid = false;
   tableSeekStartWatts        = rtConfig->watts.getValue();
@@ -682,6 +685,9 @@ void ErgMode::_stopTrustedTableSeek(const char* reason, bool seedPidFromTable, b
   }
   tableSeekPidSeedValid    = seedPidFromTable;
   tableSeekPidSeedPosition = tableSeekPosition;
+  // The motor is already at the table's position: watts still changing are the brake catching up with a finished
+  // move, not a trend the motor will continue. The next PID update must not amplify that lag (see _inSetpointState).
+  tableSeekArrivedHandoff  = !acquireFeedback && tableSeekState == TableSeekState::SETTLING;
   tableSeekState           = TableSeekState::INACTIVE;
   tableSeekDropCadence     = false;
   tableSeekStableMatches   = 0;
@@ -867,6 +873,8 @@ int32_t ErgMode::_inSetpointState() {
   const int target        = rtConfig->watts.getTarget();
   const int measuredError = target - watts;
   int error               = ErgControl::approachingError(measuredError, responseTrend);
+  const bool arrivedHandoff = tableSeekArrivedHandoff;
+  tableSeekArrivedHandoff   = false;  // Applies to this update only.
 
   const double sustainedTrend = responseTrend * responsePreviousTrend > 0 ? responseTrend : 0;
   if (abs(measuredError) <= ERG_MODE_PID_WINDOW && std::abs(responseTrend) < 2.0) {
@@ -898,6 +906,10 @@ int32_t ErgMode::_inSetpointState() {
       const double predictionScale = std::min(1.0, ERG_SENSITIVITY / sensitivity);
       const int predictionLimit = std::max(abs(measuredError), static_cast<int>(std::round(std::abs(projectedError) * predictionScale)));
       error = std::max(-predictionLimit, std::min(predictionLimit, projectedError));
+    } else if (arrivedHandoff && _hasSteppedFeedback()) {
+      // Resistance-feedback bikes (e.g. Peloton Bike+): after an arrived trusted seek the brake responds late and then
+      // steeply, so the 1 s forecast overshoots. Braking may reverse direction but not exceed the measured residual.
+      error = std::max(-abs(measuredError), std::min(abs(measuredError), projectedError));
     }
   }
 
