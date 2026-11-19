@@ -687,7 +687,8 @@ void ErgMode::_stopTrustedTableSeek(const char* reason, bool seedPidFromTable, b
   tableSeekPidSeedPosition = tableSeekPosition;
   // The motor is already at the table's position: watts still changing are the brake catching up with a finished
   // move, not a trend the motor will continue. The next PID update must not amplify that lag (see _inSetpointState).
-  tableSeekArrivedHandoff  = !acquireFeedback && tableSeekState == TableSeekState::SETTLING;
+  tableSeekArrivedHandoff  = !acquireFeedback && tableSeekState == TableSeekState::SETTLING && mode == Mode::DECREASING;
+  tableSeekHandoffAt       = millis();
   tableSeekState           = TableSeekState::INACTIVE;
   tableSeekDropCadence     = false;
   tableSeekStableMatches   = 0;
@@ -873,8 +874,9 @@ int32_t ErgMode::_inSetpointState() {
   const int target        = rtConfig->watts.getTarget();
   const int measuredError = target - watts;
   int error               = ErgControl::approachingError(measuredError, responseTrend);
-  const bool arrivedHandoff = tableSeekArrivedHandoff;
-  tableSeekArrivedHandoff   = false;  // Applies to this update only.
+  // Bounded for ERG_ARRIVED_HANDOFF_MS after the handoff (a fall can span two reports), for the seek's own target only.
+  if (tableSeekArrivedHandoff && (millis() - tableSeekHandoffAt > ERG_ARRIVED_HANDOFF_MS || target != tableSeekTargetWatts)) tableSeekArrivedHandoff = false;
+  const bool arrivedHandoff = tableSeekArrivedHandoff && _hasSteppedFeedback();
 
   const double sustainedTrend = responseTrend * responsePreviousTrend > 0 ? responseTrend : 0;
   if (abs(measuredError) <= ERG_MODE_PID_WINDOW && std::abs(responseTrend) < 2.0) {
@@ -901,15 +903,17 @@ int32_t ErgMode::_inSetpointState() {
       error = std::max(-predictionLimit, std::min(predictionLimit, projectedError));
     } else if (highPowerTransition || target > ErgControl::HIGH_GAIN_WATTS) {
       error = std::max(-abs(measuredError), std::min(abs(measuredError), projectedError));
+    } else if (arrivedHandoff) {
+      // Resistance-feedback bikes (e.g. Peloton Bike+): after an arrived decreasing trusted seek the brake responds late
+      // and then steeply, so the 1 s forecast overshoots. Braking may reverse direction but not exceed the measured
+      // residual. Checked before the high-request branch, which is otherwise true after every seek once a >400 W
+      // target has been seen.
+      error = std::max(-abs(measuredError), std::min(abs(measuredError), projectedError));
     } else if (hasHighPowerRequest && boundedSeekTransition) {
       const double sensitivity = ErgControl::sanitizeSensitivity(userConfig->getERGSensitivity());
       const double predictionScale = std::min(1.0, ERG_SENSITIVITY / sensitivity);
       const int predictionLimit = std::max(abs(measuredError), static_cast<int>(std::round(std::abs(projectedError) * predictionScale)));
       error = std::max(-predictionLimit, std::min(predictionLimit, projectedError));
-    } else if (arrivedHandoff && _hasSteppedFeedback()) {
-      // Resistance-feedback bikes (e.g. Peloton Bike+): after an arrived trusted seek the brake responds late and then
-      // steeply, so the 1 s forecast overshoots. Braking may reverse direction but not exceed the measured residual.
-      error = std::max(-abs(measuredError), std::min(abs(measuredError), projectedError));
     }
   }
 

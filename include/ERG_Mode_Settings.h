@@ -91,6 +91,9 @@ constexpr int ERG_FEEDBACK_WORSENING_WATTS = 25;
 // The previous fresh report must also exceed it in the same direction, so one-report pedaling spikes stay on proportional control.
 // A quiet return inside ERG_MODE_PID_WINDOW re-arms table correction after proportional recovery.
 constexpr int ERG_TABLE_CORRECTION_WATTS = 44;
+// After a decreasing trusted seek reached its position and handed over to PID, braking on resistance-feedback bikes is
+// bounded to the measured residual for this long (the Bike+ power fall can span two reports; ERG updates ~0.7 s apart).
+constexpr uint32_t ERG_ARRIVED_HANDOFF_MS = 2500;
 // Cadence change from the last reference that can start a trusted maintenance seek; in-flight seeks track smaller changes too.
 constexpr int ERG_TABLE_CADENCE_SEEK_RPM = POWERTABLE_CAD_INCREMENT;
 // Spin-up after a real stop. A seek sized for the rising 20-60 rpm spin-up cadence overshoots once the rider
