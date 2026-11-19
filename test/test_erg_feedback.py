@@ -739,6 +739,35 @@ int main(int argc,char** argv) {
       assert(table.saves==1 && spinBLEServer.spinDownFlag==0);
     }
     writeRow(3,321); assert(spinBLEServer.spinDownFlag==1); // New upload homes again.
+  } else if(scenario.find("seek_arrived_stepped_")==0) {
+    // #784: with fresh Grupetto resistance feedback, a DECREASING trusted seek that arrived and handed over on
+    // "power trend crossed target" bounds braking to the measured residual (-10 W residual, -50 W/s trend:
+    // unbounded +40 W -> +10 W, a quarter of seek_guard_decreasing's move). "_twohop" makes the fall span two
+    // reports: the update inside ERG_ARRIVED_HANDOFF_MS is bounded too.
+    const bool twohop=scenario.find("twohop")!=std::string::npos;
+    const int sensitivity=std::stoi(scenario.substr(scenario.find_last_of('_')+1));
+    trainTrustedLow(sensitivity,240);
+    auto st=[&](uint32_t t,int w,bool fresh=true){ clockMs=t; rtConfig->resistance.setValue(45,false); step(t,w,fresh); };
+    rtConfig->watts.setTarget(100); st(27000,240);
+    assert(controller.isTableSeeking());
+    const int seek=rtConfig->getTargetIncline();
+    st(27200,240,false); st(28000,200); st(29000,160);
+    assert(controller.isTableSeeking() && rtConfig->getTargetIncline()==seek);
+    st(30000,110);
+    assert(!controller.isTableSeeking() && logged("power trend crossed target"));
+    const int move=static_cast<int>(rtConfig->getTargetIncline())-motor.current;
+    // seek_guard_decreasing moves +144/+240/+480 for the unbounded +40 W; the bound is the +10 W residual (a quarter).
+    const int expected=sensitivity==3?36:sensitivity==5?60:120;
+    printf("%s: stepped arrived handoff move %d (bound %d)\n",scenario.c_str(),move,expected); fflush(stdout);
+    assert(move>0 && move<=expected);
+    if(twohop) {
+      motor.current=rtConfig->getTargetIncline();
+      st(31000,90);  // still falling 20 W/s inside the window: bounded to the +10 W residual, never the forecast
+      const int second=static_cast<int>(rtConfig->getTargetIncline())-motor.current;
+      printf("%s: second update move %d\n",scenario.c_str(),second); fflush(stdout);
+      assert(second<=expected);
+    }
+    return 0;
   } else if(scenario.find("seek_guard_")==0) {
     const bool untrusted=scenario.find("untrusted")!=std::string::npos;
     const bool decreasing=scenario.find("decreasing")!=std::string::npos;
@@ -2029,6 +2058,12 @@ class TestErgFeedback(unittest.TestCase):
         for scenario in ("seek_guard_reset_target", "seek_guard_reset_quiet", "seek_guard_pacing", "seek_guard_stale_motion"):
             with self.subTest(scenario=scenario):
                 subprocess.run([str(self.exe), scenario], check=True)
+
+    def test_stepped_arrived_seek_bounds_braking(self):
+        for sensitivity in (3, 5, 10):
+            for kind in ("", "twohop_"):
+                with self.subTest(sensitivity=sensitivity, kind=kind):
+                    subprocess.run([str(self.exe), f"seek_arrived_stepped_{kind}{sensitivity}"], check=True)
 
     def test_amended_trusted_seek_retains_predictive_guard(self):
         for scenario in ("seek_amended_no", "seek_amended_yes", "seek_amended_nine"):

@@ -89,8 +89,10 @@ class ErgMode {
   bool confidenceWasHomed                = false;
   bool tableSeekPidSeedValid             = false;
   int32_t tableSeekPidSeedPosition       = 0;
-  // The first PID update after a trusted seek that had already reached its table position.
+  // A DECREASING trusted seek that had already reached its table position handed over to PID: for
+  // ERG_ARRIVED_HANDOFF_MS after tableSeekHandoffAt, braking on resistance-feedback bikes is bounded (see _inSetpointState).
   bool tableSeekArrivedHandoff           = false;
+  uint32_t tableSeekHandoffAt            = 0;
   bool feedbackWaiting                   = false;
   // A table move must demonstrate progress before another can interrupt proportional recovery.
   bool tableCorrectionNeedsProgress = false;
