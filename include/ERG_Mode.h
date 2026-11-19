@@ -40,6 +40,7 @@ class ErgMode {
     tableSeekStableMatches       = 0;
     tableSeekStableMisses        = 0;
     tableSeekPidSeedValid        = false;
+    tableSeekArrivedHandoff      = false;
     feedbackWaiting              = false;
     tableCorrectionNeedsProgress = false;
     confidenceWattsTimestamp     = 0;
@@ -88,6 +89,8 @@ class ErgMode {
   bool confidenceWasHomed                = false;
   bool tableSeekPidSeedValid             = false;
   int32_t tableSeekPidSeedPosition       = 0;
+  // The first PID update after a trusted seek that had already reached its table position.
+  bool tableSeekArrivedHandoff           = false;
   bool feedbackWaiting                   = false;
   // A table move must demonstrate progress before another can interrupt proportional recovery.
   bool tableCorrectionNeedsProgress = false;
