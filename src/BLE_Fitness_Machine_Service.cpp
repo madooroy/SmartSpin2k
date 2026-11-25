@@ -9,6 +9,8 @@
 #include "Main.h"
 #include "ByteUtils.h"
 #include <Constants.h>
+#include <algorithm>
+#include <climits>
 #include <vector>
 
 BLE_Fitness_Machine_Service::BLE_Fitness_Machine_Service()
@@ -340,7 +342,9 @@ void BLE_Fitness_Machine_Service::processFTMSWrite() {
       // Also notify DirCon TCP clients
       DirConManager::notifyCharacteristic(NimBLEUUID(FITNESSMACHINESERVICE_UUID), fitnessMachineTrainingStatus->getUUID(), ftmsTrainingStatus.data(), ftmsTrainingStatus.size());
     }
-    if (fitnessMachineStatusCharacteristic->getValue() != ftmsStatus) {
+    // Target Power Changed is sent on every Set Target Power, even an unchanged one: after a shift announced the same
+    // value (announceTargetPower), an app writing that target back still gets its status.
+    if (fitnessMachineStatusCharacteristic->getValue() != ftmsStatus || (!ftmsStatus.empty() && ftmsStatus[0] == FitnessMachineStatus::TargetPowerChanged)) {
       fitnessMachineStatusCharacteristic->setValue(ftmsStatus);
       fitnessMachineStatusCharacteristic->notify();
       // Also notify DirCon TCP clients
@@ -358,7 +362,7 @@ void BLE_Fitness_Machine_Service::processFTMSWrite() {
 void BLE_Fitness_Machine_Service::announceTargetPower(int watts) {
   if (fitnessMachineStatusCharacteristic == nullptr) return;
   uint8_t status[3] = {FitnessMachineStatus::TargetPowerChanged, 0, 0};
-  put_le16s(&status[1], static_cast<int16_t>(watts));
+  put_le16s(&status[1], static_cast<int16_t>(std::clamp(watts, static_cast<int>(INT16_MIN), static_cast<int>(INT16_MAX))));
   fitnessMachineStatusCharacteristic->setValue(status, sizeof(status));
   fitnessMachineStatusCharacteristic->notify();
   DirConManager::notifyCharacteristic(NimBLEUUID(FITNESSMACHINESERVICE_UUID), fitnessMachineStatusCharacteristic->getUUID(), status, sizeof(status));

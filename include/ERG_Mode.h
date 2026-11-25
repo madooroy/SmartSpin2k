@@ -27,13 +27,16 @@ class ErgMode {
   void computeErg();
   // Called after reading actual motor position, before interpreting targetIncline.
   void prepareMode();
+  // A shift while stopped (cadence at or below the ERG minimum) moves the target that resumes, not the stop's minimum.
+  int pausedTarget() const { return pausedTargetWatts; }
+  void setPausedTarget(int watts) { pausedTargetWatts = watts; }
   bool collectionAllowed() const { return !(isTableSeeking() || feedbackWaiting) || controlMaximum - static_cast<int64_t>(controlMinimum) < POWER_SAMPLE_POSITION_SPAN; }
   void _writeLog(float currentIncline, float newIncline, int currentSetPoint, int newSetPoint, int currentWatts, int newWatts, int currentCadence, int newCadence);
   bool isTableSeeking() const { return tableSeekState != TableSeekState::INACTIVE; }
   void resetTableConfidence() {
     tableConfidence.reset();
     tableSeekState               = TableSeekState::INACTIVE;
-    tableSeekDropCadence         = false;
+    tableSeekHeldCadence         = false;
     tableSeekFirstArrivalValid   = false;
     tableSeekHadHighTarget       = false;
     mode                         = Mode::MAINTAIN;
@@ -161,15 +164,17 @@ class ErgMode {
   uint32_t steppedErrorSince        = 0;
   bool _steppedHold(int measuredError);
   bool _hasSteppedFeedback() const;
-  // Recovery drops with stepped feedback are sized at the rider's held cadence (ERG_STEPPED_DROP_CADENCE_ALLOWANCE_RPM).
+  // With stepped feedback, recovery drops and repeat climbs are sized at the rider's held cadence (see _heldSeekCadence()).
   // Allocated on the first fresh Grupetto feedback; other bikes never pay for it.
   ErgControl::CadenceHistory* cadenceHistory = nullptr;
   int historyTarget         = 0;
   uint32_t historySettledAt = 0;     // when power last came within ERG_STEPPED_IMMEDIATE_WATTS of historyTarget (0: not)
-  bool tableSeekDropCadence = false; // the active seek used a held cadence instead of the rider's current cadence
-  int tableSeekDropDirection = 0;    // -1: held cadence below the rider's (settling down), +1: above (spinning back up)
+  bool tableSeekHeldCadence = false; // the active seek used a held cadence instead of the rider's current cadence
+  int tableSeekHeldDirection = 0;    // -1: held cadence below the rider's (settling down), +1: above (spinning back up)
+  int tableSeekHeldBest = 0;         // the rider's cadence closest to the held cadence so far in this seek
+  uint32_t tableSeekHeldProgressAt = 0; // when tableSeekHeldBest last moved toward the held cadence
   void _recordCadenceHistory(bool holding);
-  int _dropSeekCadence(int target, int cadence, const char*& source);
+  int _heldSeekCadence(int target, int cadence, const char*& source);
   int _climbSeekCadence(int target, int cadence, const char*& source);
 
   // calculate incline if setpoint (from Zwift) changes

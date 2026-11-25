@@ -1378,6 +1378,61 @@ int main(int argc,char** argv) {
       }
     }
     printf("stepped_drop_cadence: drop without %d, held %d, floored %d, after low-cadence climb %d\n",drop[0],drop[1],drop[2],drop[3]); fflush(stdout);
+  } else if(scenario=="stepped_climb_cadence") {
+    // With fresh Grupetto feedback a climb back to a target already held (repeat efforts) is sized at the cadence held
+    // there: riders spin up into the effort during the countdown. Recovery 155 W at 89 rpm, efforts 300 W at 102 rpm.
+    // Run 0: no feedback, sized at the current cadence. Run 1: second effort entered at 91 rpm, sized at 102 rpm;
+    // the rider spins up and the seek then follows cadence. Run 2: the rider stays at 91 rpm; once the motor has
+    // arrived and cadence stops rising for ERG_STEPPED_HELD_CADENCE_STALL_MS the seek follows 91 rpm (more brake).
+    // Run 3: a table where more cadence needs more brake (sparse edge extrapolation) never sizes a climb harder.
+    for(int run=0;run<4;++run) {
+      const uint32_t o=1000000u*run;
+      logs.clear(); clockMs=o+100; controller.resetTableConfidence(); controller.prepareMode(); setup(155,155); userConfig->setERGSensitivity(3);
+      table.sloped=true; table.cadenceSlope=-100; table.lookupResult=motor.current-500;   // lookup(155, 89) = motor
+      const bool feedback=run!=0;
+      auto feed=[&](uint32_t t){ if(feedback) { clockMs=t; rtConfig->resistance.setValue(40,false); } };
+      rtConfig->cad.setValue(89);
+      for(uint32_t t=1000;t<=61000;t+=1000) { feed(o+t); step(o+t,155); }
+      assert(logged("now trusted"));
+      rtConfig->cad.setValue(102); rtConfig->watts.setTarget(300);
+      for(uint32_t t=62000;t<=92000;t+=1000) { feed(o+t); step(o+t,t==62000?155:300); }
+      rtConfig->cad.setValue(89); rtConfig->watts.setTarget(155);
+      for(uint32_t t=93000;t<=123000;t+=1000) { feed(o+t); step(o+t,t==93000?300:155); }
+      assert(!controller.isTableSeeking());
+      logs.clear();
+      if(run==3) table.cadenceSlope=100;   // the surface now says more cadence needs more brake
+      rtConfig->cad.setValue(91); rtConfig->watts.setTarget(300); feed(o+124000); step(o+124000,155,false);
+      const int climb=rtConfig->getTargetIncline();
+      if(run==1 || run==2) {
+        assert(logged("Climb sized at held cadence 102rpm (rider now 91rpm)"));
+        assert(controller.isTableSeeking());
+        assert(climb < table.lookup(300,91));   // less brake than the current cadence would ask for
+        if(run==1) {
+          for(int k=1;k<=6;++k) { rtConfig->cad.setValue(91+11*k/6); feed(o+124000+k*500); step(o+124000+k*500,155+k*20); }
+          assert(!logged("Rider stayed at"));
+        } else {
+          for(int k=1;k<=8;++k) { feed(o+124000+k*500); step(o+124000+k*500,260); }
+          assert(logged("Rider stayed at 91rpm (held 102rpm); seek follows cadence"));
+          assert(rtConfig->getTargetIncline() > climb);   // the seek moved on to the rider's cadence
+        }
+      } else {
+        assert(!logged("Climb sized"));
+      }
+      printf("stepped_climb_cadence run %d: climb to %d (lookup at 91 rpm %d, at 102 rpm %d)\n",run,climb,table.lookup(300,91),table.lookup(300,102)); fflush(stdout);
+    }
+  } else if(scenario=="stepped_climb_shift") {
+    // A shift (+10 W) or a small ramp step lands within the history's 10% of the target being left and must not be
+    // read as a climb back to a held target: it is sized at the rider's current cadence, as before.
+    setup(200,200); userConfig->setERGSensitivity(3);
+    table.sloped=true; table.cadenceSlope=-100; table.lookupResult=motor.current-(200-155)*12-(92-94)*(-100);  // lookup(200,92)=motor
+    auto feed=[&](uint32_t t){ clockMs=t; rtConfig->resistance.setValue(40,false); };
+    rtConfig->cad.setValue(92);
+    for(uint32_t t=1000;t<=61000;t+=1000) { feed(t); step(t,200); }
+    assert(logged("now trusted"));
+    logs.clear();
+    rtConfig->cad.setValue(88); rtConfig->watts.setTarget(210); feed(62000); step(62000,200,false);
+    for(uint32_t t=62500;t<=66000;t+=500) { feed(t); step(t,205); }
+    assert(!logged("Climb sized"));
   } else if(scenario=="stepped_drop_cadence_recent") {
     // Nov 8: a warm-up at 88 rpm at the recovery target, then riding at 72 rpm. The recovery cadence must follow
     // the most recent riding at that target, not the warm-up: the old ~1 minute mean still said 81-82 rpm after
@@ -2024,7 +2079,7 @@ class TestErgFeedback(unittest.TestCase):
         for scenario in ["ride_handoff", "crossing_and_safety", "reduction_safety", "worsening_reduction", "ordinary_reduction",
                          "new_target", "cadence_stop", "cadence_coast_step", "cadence_stop_real", "spinup_noisy_cadence",
                          "spinup_timeout", "spinup_power_trend", "spinup_lower_target", "spinup_target_change_during_hold", "spinup_ease_needs_support", "spinup_ease_waits_for_response",
-                         "spinup_mode_reset", "stepped_feedback_gate", "stepped_drop_cadence", "stepped_drop_cadence_recent", "brake_hold", "rv_low_cadence_drill", "rv_stop_then_slow_restart", "rv_single_sample_glitch", "rv_sprint_end",
+                         "spinup_mode_reset", "stepped_feedback_gate", "stepped_drop_cadence", "stepped_drop_cadence_recent", "stepped_climb_cadence", "stepped_climb_shift", "brake_hold", "rv_low_cadence_drill", "rv_stop_then_slow_restart", "rv_single_sample_glitch", "rv_sprint_end",
                          "mode_change", "missing_feedback", "movement_timeout", "no_table", "pid_no_wait_decrease", "small_error",
                          "clamped_move", "clock_wrap", "trusted_seek", "trusted_seek_late_uptime", "simulation_1000", "simulation_2000", "simulation_3000",
                          "simulation_missing_2000", "trust_transients", "stale_seek", "seek_deadline", "sparse_seventy", "extrapolated_cadence",
