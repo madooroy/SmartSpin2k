@@ -170,6 +170,7 @@ class ErgMode {
   int tableSeekDropDirection = 0;    // -1: held cadence below the rider's (settling down), +1: above (spinning back up)
   void _recordCadenceHistory(bool holding);
   int _dropSeekCadence(int target, int cadence, const char*& source);
+  int _climbSeekCadence(int target, int cadence, const char*& source);
 
   // calculate incline if setpoint (from Zwift) changes
   int32_t _setPointChangeState();
