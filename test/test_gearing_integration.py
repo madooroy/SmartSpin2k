@@ -120,10 +120,17 @@ struct Client {
 struct Server { int spinDownFlag = 0; } spinBLEServer;
 struct BLE_Fitness_Machine_Service {
   int status = 0;
+  int announced = 0;
   void spinDown(int value) { status = value; }
+  void announceTargetPower(int watts) { announced = watts; }
   int calculateResistanceFromPosition();
 } fitnessMachineService;
-struct Erg { void resetTableConfidence() {} void prepareMode() {} bool isTableSeeking() { return false; } } erg;
+struct Erg {
+  int paused = 0;
+  void resetTableConfidence() {} void prepareMode() {} bool isTableSeeking() { return false; }
+  int pausedTarget() const { return paused; }
+  void setPausedTarget(int watts) { paused = watts; }
+} erg;
 Erg* ergMode = &erg;
 struct PowerTable {
   PTData ptData;
@@ -785,6 +792,26 @@ int main() {
   safetyReady = true;
   controller.moveStepper();
   assert(motor.pos == 799);
+
+  // An ERG shift moves the target and announces it to connected apps (FTMS Target Power Changed). While stopped
+  // (cadence below the ERG minimum, target lowered to min watts) it moves the target that resumes instead.
+  reset();
+  runtime.setHomed(true);
+  runtime.setFTMSMode(FitnessMachineControlPointProcedure::SetTargetPower);
+  runtime.watts.setTarget(200);
+  controller.FTMSModeShiftModifier();
+  runtime.setShifterPosition(runtime.getShifterPosition() + 1);
+  controller.FTMSModeShiftModifier();
+  assert(runtime.watts.getTarget() == 200 + ERG_PER_SHIFT);
+  assert(fitnessMachineService.announced == 200 + ERG_PER_SHIFT);
+  erg.paused = 250;
+  runtime.watts.setTarget(config.getMinWatts());
+  runtime.setShifterPosition(runtime.getShifterPosition() + 1);
+  controller.FTMSModeShiftModifier();
+  assert(erg.paused == 250 + ERG_PER_SHIFT);
+  assert(runtime.watts.getTarget() == config.getMinWatts());
+  assert(fitnessMachineService.announced == 250 + ERG_PER_SHIFT);
+  erg.paused = 0;
 }
 '''
         preset_pattern = r"chainrings: (\[[^\]]*\]),\s*cassette: (\[[^\]]*\])"

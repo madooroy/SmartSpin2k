@@ -171,6 +171,9 @@ constexpr int ERG_STEPPED_DROP_CADENCE_RISE_MAX_RPM = 25;
 // A climb back to a target already held is sized at the cadence held there (riders spin up into repeat efforts), at
 // most this much above the current cadence. 15 rpm covers an 88-91 rpm recovery into a 100-105 rpm effort.
 constexpr int ERG_STEPPED_CLIMB_CADENCE_RISE_MAX_RPM = 15;
+// A seek sized at a held cadence waits for the rider to get there. Once the motor has arrived, if the rider's cadence
+// has stopped moving toward the held cadence for this long, the seek follows the rider's actual cadence instead.
+constexpr uint32_t ERG_STEPPED_HELD_CADENCE_STALL_MS = 2000;
 // Spacing and memory of the cadence history (2 s samples, 10 minutes).
 constexpr uint32_t ERG_STEPPED_HISTORY_SAMPLE_MS = 2000;
 constexpr uint32_t ERG_STEPPED_HISTORY_MEMORY_MS = 600000;

@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- ERG shifts announce the new target to connected apps with the FTMS status Target Power Changed (`0x08`), over Bluetooth and DirCon, so an app can show it. A shift while stopped (cadence at the ERG minimum) now changes the target that resumes; it used to be lost and could leave the resumed target at minimum watts.
 - Custom characteristic `0x36` reports firmware capabilities as a versioned bit field (first bit: write-only WiFi password).
 
 ### Changed
@@ -17,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Status page debug log keeps the newest entries when full (it was discarding 10 of every 11 new lines after the first 1,000) and holds up to 6,000 lines so "Save Log" covers a whole ride; the page still renders the newest 1,000.
 - ESP32-S3: keep the web interface, DirCon and motor loop responsive while USB is plugged into a computer that is not reading the serial port. Serial log output is now dropped instead of waiting up to two seconds per write.
 - Stepped-resistance recovery drops (Peloton Bike+ via Grupetto) follow the cadence most recently held at the recovery target (about the last 20 s of settled riding) instead of a ~1 minute mean, so a change of riding style no longer sizes recoveries for the old cadence. One cadence spike moves it at most 3 rpm, and the held and typical cadence means round instead of truncating.
+- Stepped-resistance repeat efforts: a climb back to a target already held is sized at the cadence held there (at most 15 rpm above the current cadence), so a rider who spins up during the countdown no longer overshoots. Only real steps qualify (more than 44 W; not shifts or small ramp steps), never a position harder than the current cadence's. A seek waiting at a held cadence follows the rider's actual cadence once the motor has arrived and cadence has stopped moving toward it for 2 s, and that settling is not scored against the power table.
 
 ### Hardware
 

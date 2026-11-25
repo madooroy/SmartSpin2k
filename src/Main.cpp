@@ -548,7 +548,8 @@ void SS2K::FTMSModeShiftModifier() {
       case FitnessMachineControlPointProcedure::SetTargetPower:  // ERG Mode
       {
         rtConfig->setShifterPosition(ss2k->lastShifterPosition);  // reset shifter position because we're remapping it to ERG target
-        const int proposedTarget = rtConfig->watts.getTarget() + (shiftDelta * ERG_PER_SHIFT);
+        const int pausedTarget   = ergMode->pausedTarget();
+        const int proposedTarget = (pausedTarget != 0 ? pausedTarget : rtConfig->watts.getTarget()) + (shiftDelta * ERG_PER_SHIFT);
         const int minimumTarget  = rtConfig->getHomed() ? 0 : userConfig->getMinWatts();
         const int maximumTarget  = userConfig->getMaxWatts();
         const bool belowMinimum  = shiftDelta < 0 && proposedTarget < minimumTarget;
@@ -557,12 +558,17 @@ void SS2K::FTMSModeShiftModifier() {
           SS2K_LOG(MAIN_LOG_TAG, "Shift to %dw blocked", proposedTarget);
           break;
         }
-        rtConfig->watts.setTarget(proposedTarget);
-        SS2K_LOG(MAIN_LOG_TAG, "ERG Shift. New Target: %dw", rtConfig->watts.getTarget());
-        fitnessMachineService.announceTargetPower(rtConfig->watts.getTarget());
+        if (pausedTarget != 0) {
+          ergMode->setPausedTarget(proposedTarget);
+          SS2K_LOG(MAIN_LOG_TAG, "ERG Shift while stopped. Target on resume: %dw", proposedTarget);
+        } else {
+          rtConfig->watts.setTarget(proposedTarget);
+          SS2K_LOG(MAIN_LOG_TAG, "ERG Shift. New Target: %dw", proposedTarget);
+        }
+        fitnessMachineService.announceTargetPower(proposedTarget);
 // Format output for FTMS passthrough
 #ifndef INTERNAL_ERG_4EXT_FTMS
-        int adjustedTarget         = round(rtConfig->watts.getTarget() / userConfig->getPowerCorrectionFactor());
+        int adjustedTarget         = round(proposedTarget / userConfig->getPowerCorrectionFactor());
         const uint8_t translated[] = {FitnessMachineControlPointProcedure::SetTargetPower, (uint8_t)(adjustedTarget & 0xff), (uint8_t)(adjustedTarget >> 8)};
         spinBLEClient.FTMSControlPointWrite(translated, 3);
 #endif
