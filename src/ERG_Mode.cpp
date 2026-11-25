@@ -334,7 +334,8 @@ int32_t ErgMode::_setPointChangeState() {
     // coverage. Approach the near side of the power window there and let
     // measured feedback finish the transition. Retain ordinary table seeks
     // when the cadence-curve estimate is unavailable.
-    // A stepped-feedback recovery drop is sized at the cadence the rider will settle back to.
+    // With stepped feedback, a recovery drop is sized at the cadence the rider will settle back to, and a climb to a
+    // target already held at the cadence held there (see _dropSeekCadence()).
     const char* cadenceSource    = "current";
     const int seekCadence        = _dropSeekCadence(currentTarget, currentCadence, cadenceSource);
     const bool extrapolatedCurve = !_tableTargetIsWithinMeasuredBounds(currentTarget, seekCadence) &&
@@ -369,7 +370,8 @@ int32_t ErgMode::_setPointChangeState() {
     const bool movesTowardTarget = (mode == Mode::INCREASING && tableResult > ss2k->getCurrentPosition()) || (mode == Mode::DECREASING && tableResult < ss2k->getCurrentPosition());
     if (tableResult != RETURN_ERROR && tableResult >= 0 && insideTravel && movesTowardTarget) {
       if (seekCadence != currentCadence) {
-        SS2K_LOG(ERG_MODE_LOG_TAG, "Recovery drop sized at %s cadence %drpm (rider now %drpm)", cadenceSource, seekCadence, currentCadence);
+        SS2K_LOG(ERG_MODE_LOG_TAG, "%s sized at %s cadence %drpm (rider now %drpm)", mode == Mode::INCREASING ? "Climb" : "Recovery drop",
+                 cadenceSource, seekCadence, currentCadence);
       }
       _startTrustedTableSeek(tableResult, seekCadence);
       return tableResult;
@@ -1065,14 +1067,20 @@ void ErgMode::_recordCadenceHistory(bool holding) {
   cadenceHistory->record(now, rtConfig->cad.getValue(), settled ? target : 0);
 }
 
-// The cadence used to size a table seek. Only a real easing-off with fresh stepped feedback changes it: a lower
-// target than before, with measured power still above it. Then the held (or typical) cadence is used, between the
-// current cadence minus ERG_STEPPED_DROP_CADENCE_ALLOWANCE_RPM and plus ERG_STEPPED_DROP_CADENCE_RISE_MAX_RPM.
+// The cadence used to size a table seek, with fresh stepped feedback:
+// - A real easing-off (a lower target than before, measured power still above it): the held (or typical) cadence,
+//   between the current cadence minus ERG_STEPPED_DROP_CADENCE_ALLOWANCE_RPM and plus ERG_STEPPED_DROP_CADENCE_RISE_MAX_RPM.
+// - A climb back to a target the rider has already held (repeated efforts): the cadence held there, if above the
+//   current one and by at most ERG_STEPPED_CLIMB_CADENCE_RISE_MAX_RPM. Riders spin up into a repeat effort; a climb
+//   sized at the cadence of the moment it was sent (still the recovery's) set the brake for that cadence, and power
+//   overshot as the rider sped up (Nov 25, 30/30s at 362 W: 91 rpm sized, 102 rpm ridden, 384-386 W).
 // Otherwise, and on other bikes, the current cadence.
 int ErgMode::_dropSeekCadence(int target, int cadence, const char*& source) {
   source               = "current";
   const int previous   = prevWatts.getTarget();
-  if (cadenceHistory == nullptr || !_hasSteppedFeedback() || previous <= 0 || target >= previous || rtConfig->watts.getValue() <= target) return cadence;
+  if (cadenceHistory == nullptr || !_hasSteppedFeedback() || previous <= 0) return cadence;
+  if (target > previous) return _climbSeekCadence(target, cadence, source);
+  if (target == previous || rtConfig->watts.getValue() <= target) return cadence;
   const uint32_t now = millis();
   int remembered     = cadenceHistory->cadenceAt(target, now);
   source             = "held";
@@ -1094,6 +1102,20 @@ int ErgMode::_dropSeekCadence(int target, int cadence, const char*& source) {
     source = "current";
     return cadence;
   }
+  return chosen;
+}
+
+// See _dropSeekCadence(): a climb to a target already held is sized at the cadence held there, never below the
+// rider's current cadence. The first effort, or one at a new power, has no held cadence and uses the current one.
+int ErgMode::_climbSeekCadence(int target, int cadence, const char*& source) {
+  source = "current";
+  if (rtConfig->watts.getValue() >= target) return cadence;
+  const int remembered = cadenceHistory->cadenceAt(target, millis());
+  if (remembered <= cadence) return cadence;
+  const int ceiling = cadence + ERG_STEPPED_CLIMB_CADENCE_RISE_MAX_RPM;
+  const int chosen  = std::min(remembered, ceiling);
+  if (!_tableTargetIsTrusted(target, chosen)) return cadence;
+  source = remembered > ceiling ? "capped" : "held";
   return chosen;
 }
 

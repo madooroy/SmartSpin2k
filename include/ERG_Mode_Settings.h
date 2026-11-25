@@ -168,6 +168,9 @@ constexpr int ERG_STEPPED_DROP_CADENCE_ALLOWANCE_RPM = 15;
 // A drop may also be sized above the current cadence (a low-cadence climb followed by a normal-cadence recovery),
 // by at most this much.
 constexpr int ERG_STEPPED_DROP_CADENCE_RISE_MAX_RPM = 25;
+// A climb back to a target already held is sized at the cadence held there (riders spin up into repeat efforts), at
+// most this much above the current cadence. 15 rpm covers an 88-91 rpm recovery into a 100-105 rpm effort.
+constexpr int ERG_STEPPED_CLIMB_CADENCE_RISE_MAX_RPM = 15;
 // Spacing and memory of the cadence history (2 s samples, 10 minutes).
 constexpr uint32_t ERG_STEPPED_HISTORY_SAMPLE_MS = 2000;
 constexpr uint32_t ERG_STEPPED_HISTORY_MEMORY_MS = 600000;
