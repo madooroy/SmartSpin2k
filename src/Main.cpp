@@ -553,6 +553,7 @@ void SS2K::FTMSModeShiftModifier() {
         }
         rtConfig->watts.setTarget(proposedTarget);
         SS2K_LOG(MAIN_LOG_TAG, "ERG Shift. New Target: %dw", rtConfig->watts.getTarget());
+        fitnessMachineService.announceTargetPower(rtConfig->watts.getTarget());
 // Format output for FTMS passthrough
 #ifndef INTERNAL_ERG_4EXT_FTMS
         int adjustedTarget         = round(rtConfig->watts.getTarget() / userConfig->getPowerCorrectionFactor());

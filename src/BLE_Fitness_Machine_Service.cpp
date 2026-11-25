@@ -352,6 +352,19 @@ void BLE_Fitness_Machine_Service::processFTMSWrite() {
   }
 }
 
+// An ERG shift changes the target on the bike itself. Send the standard FTMS status
+// "Target Power Changed" (0x08) so a connected app can show the new target, the same
+// notice that follows an app's own Set Target Power. Apps that ignore it are unaffected.
+void BLE_Fitness_Machine_Service::announceTargetPower(int watts) {
+  if (fitnessMachineStatusCharacteristic == nullptr) return;
+  uint8_t status[3] = {FitnessMachineStatus::TargetPowerChanged, 0, 0};
+  put_le16s(&status[1], static_cast<int16_t>(watts));
+  fitnessMachineStatusCharacteristic->setValue(status, sizeof(status));
+  fitnessMachineStatusCharacteristic->notify();
+  DirConManager::notifyCharacteristic(NimBLEUUID(FITNESSMACHINESERVICE_UUID), fitnessMachineStatusCharacteristic->getUUID(), status, sizeof(status));
+  SS2K_LOG(FMTS_SERVER_LOG_TAG, "Announced target power %dw", watts);
+}
+
 bool BLE_Fitness_Machine_Service::spinDown(uint8_t response) {
   uint8_t spinStatus[2] = {FitnessMachineStatus::SpinDownStatus, response};
   // Set the value of the characteristic
