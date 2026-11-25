@@ -16,6 +16,8 @@ class BLE_Fitness_Machine_Service {
   void setupService(NimBLEServer *pServer, MyCharacteristicCallbacks *chrCallbacks);
   void update();
   bool spinDown(uint8_t response);
+  // Tell connected apps (BLE and DirCon) the ERG target changed on the bike, e.g. by a shift.
+  void announceTargetPower(int watts);
   void processFTMSWrite();
   
  private:
