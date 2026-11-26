@@ -776,11 +776,12 @@ void ErgMode::_handleTrustedTableSeek() {
   }
   if (tableSeekHeldCadence && (targetAmended || cadence * tableSeekHeldDirection >= tableSeekCadence * tableSeekHeldDirection)) {
     tableSeekHeldCadence = false;
-  } else if (tableSeekHeldCadence && tableSeekHeldDirection > 0 && tableSeekState == TableSeekState::SETTLING &&
+  } else if (tableSeekHeldCadence && (tableSeekHeldDirection > 0 || mode != Mode::DECREASING) && tableSeekState == TableSeekState::SETTLING &&
              static_cast<uint32_t>(millis()) - tableSeekHeldProgressAt >= ERG_STEPPED_HELD_CADENCE_STALL_MS) {
-    // Only while waiting for the rider to spin UP to the held cadence (a repeat effort, or a recovery after a low-cadence
-    // climb). Coming down from an effort the flywheel needs 4-6 s to spin down: following the still-high cadence after
-    // 2 s took brake off just before cadence fell (Nov 26: 165 W recoveries dipped to 128-150 W).
+    // Not on a drop into a recovery while waiting for cadence to come DOWN: the flywheel needs 4-6 s to spin down, and
+    // following the still-high cadence after 2 s took brake off just before cadence fell (Nov 26: 165 W recoveries
+    // dipped to 128-150 W). Climbs keep the stall release either way (review: a repeat climb remembered at 85 rpm with
+    // the rider at 97 stayed sized for 85 rpm until the settle handoff).
     tableSeekHeldCadence = false;
     if (abs(cadence - tableSeekCadence) >= ERG_CADENCE_FOLLOW_DEADBAND_RPM)
       SS2K_LOG(ERG_MODE_LOG_TAG, "Rider stayed at %drpm (held %drpm); seek follows cadence", cadence, tableSeekCadence);
@@ -946,14 +947,15 @@ int32_t ErgMode::_inSetpointState() {
       // residual. Checked before the high-request branch, which is otherwise true after every seek once a >400 W
       // target has been seen.
       error = std::max(-abs(measuredError), std::min(abs(measuredError), projectedError));
-      // After a climb, never reverse while power is still below the target: the knob is already where the table put it.
-      if (tableSeekArrivedClimb && measuredError > 0) error = std::max(error, 0);
     } else if (hasHighPowerRequest && boundedSeekTransition) {
       const double sensitivity = ErgControl::sanitizeSensitivity(userConfig->getERGSensitivity());
       const double predictionScale = std::min(1.0, ERG_SENSITIVITY / sensitivity);
       const int predictionLimit = std::max(abs(measuredError), static_cast<int>(std::round(std::abs(projectedError) * predictionScale)));
       error = std::max(-predictionLimit, std::min(predictionLimit, projectedError));
     }
+    // After an arrived climb, never reverse while power is still below the target: the knob is already where the table
+    // put it. After every branch above, so climbs to or from over 400 W are covered too (review).
+    if (arrivedHandoff && tableSeekArrivedClimb && measuredError > 0) error = std::max(error, 0);
   }
 
   // A table move must earn another acquisition pause by producing a meaningful
@@ -1191,8 +1193,11 @@ bool ErgMode::_steppedLevelStep(int measuredError, int32_t& position) {
   const int target  = rtConfig->watts.getTarget();
   const int cadence = rtConfig->cad.getValue();
   const int band    = _steppedHoldWatts(target, cadence);
+  // Step only past half a level (uncapped, unlike the hold band): a one-level move then always lands closer to the
+  // target, so it cannot bounce between two levels when a level is worth 20 W or more (review).
+  const double halfLevel = _wattsPerLevel(target, cadence) / 2.0;
   if (!_hasSteppedFeedback() || band <= ERG_STEPPED_HOLD_WATTS || transitionTarget != INT32_MIN || tableCorrectionNeedsProgress || isTableSeeking() ||
-      abs(measuredError) <= band || std::abs(responseTrend) >= ERG_STEPPED_LEVEL_STEADY_WPS) {
+      abs(measuredError) <= halfLevel || std::abs(responseTrend) >= ERG_STEPPED_LEVEL_STEADY_WPS) {
     levelErrorSign = 0;
     return false;
   }

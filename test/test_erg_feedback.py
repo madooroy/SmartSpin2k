@@ -747,8 +747,9 @@ int main(int argc,char** argv) {
     // a steady residual beyond half a level moves the knob to the middle of the next level. Run 0: no map. Run 1:
     // coarse, -12 W steady -> immediate level step; then +5 W (inside the 6 W band) is held, not corrected.
     // Run 2: coarse, -8 W steady -> level step only after ERG_STEPPED_PERSIST_MS. Run 3: fine levels (40 steps/level,
-    // ~3 W/level): never a level step, band stays 4 W.
-    for(int run=0;run<4;++run) {
+    // ~3 W/level): never a level step, band stays 4 W. Run 4: very coarse (270 steps/level, ~22 W/level): a steady
+    // -10 W is under half a level, so no step (one level up would land ~+12 W: bouncing between two levels; review).
+    for(int run=0;run<5;++run) {
       const uint32_t o=1000000u*run;
       logs.clear(); controller.resetTableConfidence(); controller.prepareMode();
       table.ftmsCalibration=FtmsCalibration::Map{};
@@ -756,17 +757,17 @@ int main(int argc,char** argv) {
       table.realSlope=true;
       const int here=table.lookup(240,85);
       if(run>0) {
-        const int perLevel=run==3?40:150;
+        const int perLevel=run==3?40:run==4?270:150;
         auto& m=table.ftmsCalibration; m.source=1; m.maximum=24482;
         m.position[1]=here+perLevel/2; m.position[0]=m.position[1]-perLevel*35/2; m.position[2]=m.position[1]+perLevel*33/2;
         assert(m.valid());
       }
       motor.current=motor.target=here; rtConfig->setTargetIncline(here);
-      const int watts=run==2?232:228;
+      const int watts=run==2?232:run==4?230:228;
       auto st=[&](uint32_t t,int w){ clockMs=o+t; rtConfig->resistance.setValue(50,false); step(o+t,w); };
       st(40000,watts); st(41000,watts);
       bool stepped=logged("Level step");
-      if(run==2) { assert(!stepped); st(42000,watts); st(43000,watts); stepped=logged("Level step"); }
+      if(run==2||run==4) { assert(!stepped); st(42000,watts); st(43000,watts); stepped=logged("Level step"); }
       int32_t center=0, unc=0;
       if(run==1||run==2) {
         assert(stepped && logged("resistance 50 -> 51"));

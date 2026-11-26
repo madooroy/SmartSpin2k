@@ -7,6 +7,7 @@
 
 #include "DirConManager.h"
 #include "SS2KLog.h"
+#include "ErgFailsafe.h"
 #include <algorithm>
 #include <Constants.h>
 #include <errno.h>
@@ -190,6 +191,7 @@ void DirConManager::stop() {
 
     xSemaphoreTake(s_outboundMutex, portMAX_DELAY);
     for (int i = 0; i < DIRCON_MAX_CLIENTS; i++) {
+      if (clientActive[i]) ErgFailsafe::noteDisconnect(ErgFailsafe::DIRCON, static_cast<uint16_t>(i), millis());
       dirConClients[i].stop();
       clientActive[i]        = false;
       receiveBufferLength[i] = 0;
@@ -413,6 +415,7 @@ void DirConManager::closeClient(size_t clientIndex, const char* reason) {
 
   String clientIP = dirConClients[clientIndex].remoteIP().toString();
 
+  ErgFailsafe::noteDisconnect(ErgFailsafe::DIRCON, static_cast<uint16_t>(clientIndex), millis());
   xSemaphoreTake(s_outboundMutex, portMAX_DELAY);
   dirConClients[clientIndex].stop();
   clientActive[clientIndex]        = false;
@@ -702,6 +705,10 @@ bool DirConManager::processDirConMessage(DirConMessage* message, size_t clientIn
 
       // Write the value (setValue doesn't return a status in NimBLE)
       characteristic->setValue(message->AdditionalData.data(), message->AdditionalData.size());
+
+      // The ERG failsafe follows the app that controls the trainer (the last control-point writer).
+      if (characteristic->getUUID().equals(FITNESSMACHINECONTROLPOINT_UUID))
+        ErgFailsafe::noteWrite(ErgFailsafe::DIRCON, static_cast<uint16_t>(clientIndex), millis());
 
       // Let registered services handle the write via callbacks
       for (size_t i = 0; i < registeredServiceCount; i++) {

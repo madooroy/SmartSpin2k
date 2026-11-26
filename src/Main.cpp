@@ -343,16 +343,22 @@ void SS2K::maintenanceLoop(void*) {
       // 500ms
       if ((millis() - bleTimer) > BLE_NOTIFY_DELAY) {
         BLECommunications();
-        // ERG left holding a target after its app disappeared (Wi-Fi drop, app crash): ease to the recent recovery.
+#if ERG_FAILSAFE_ENABLED
+        // ERG left holding a target after its controlling app disappeared (Wi-Fi drop, app crash): ease to the recent
+        // recovery. The rider's real target: during the cadence pause the paused one, not the stand-in minimum.
         static ErgFailsafe::State ergFailsafe;
-        const int controllers = spinBLEServer.connectedClientCount() + DirConManager::connectedClients();
-        const int eased       = ErgFailsafe::update(ergFailsafe, rtConfig->getFTMSMode() == FitnessMachineControlPointProcedure::SetTargetPower,
-                                                    rtConfig->watts.getTarget(), controllers, millis());
+        const int pausedTarget    = ergMode->pausedTarget();
+        const int realTarget      = pausedTarget != 0 ? pausedTarget : rtConfig->watts.getTarget();
+        const ErgFailsafe::Writer& w = ErgFailsafe::writer();
+        const int eased = ErgFailsafe::update(ergFailsafe, rtConfig->getFTMSMode() == FitnessMachineControlPointProcedure::SetTargetPower, realTarget,
+                                              w.present, w.goneAt, millis());
         if (eased > 0) {
-          SS2K_LOG(MAIN_LOG_TAG, "No app connected for %lu ms in ERG: easing target %d -> %d W", static_cast<unsigned long>(ErgFailsafe::GRACE_MS),
-                   rtConfig->watts.getTarget(), eased);
-          rtConfig->watts.setTarget(eased);
+          SS2K_LOG(MAIN_LOG_TAG, "Controlling app gone for %lu ms in ERG: easing target %d -> %d W", static_cast<unsigned long>(ErgFailsafe::GRACE_MS), realTarget,
+                   eased);
+          if (pausedTarget != 0) ergMode->setPausedTarget(eased);   // restored when pedalling resumes
+          else rtConfig->watts.setTarget(eased);
         }
+#endif
         logHandler.writeLogs();
         webSocketAppender.Loop();
         bleTimer = millis();
