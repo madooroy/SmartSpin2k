@@ -8,6 +8,7 @@
 #include "Main.h"
 #include "SS2KLog.h"
 #include "BLE_Common.h"
+#include "ErgFailsafe.h"
 #include <Constants.h>
 #include <NimBLEDevice.h>
 #include <NimBLEUtils.h>
@@ -254,6 +255,7 @@ void MyServerCallbacks::onConnect(NimBLEServer* pServer, NimBLEConnInfo& connInf
 }
 
 void MyServerCallbacks::onDisconnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo, int reason) {
+  ErgFailsafe::noteDisconnect(ErgFailsafe::BLE, connInfo.getConnHandle(), millis());
   BLE_ss2kCustomCharacteristic::onDisconnect(connInfo.getConnHandle());
   SS2K_LOG(BLE_SERVER_LOG_TAG, "Bluetooth Remote Client Disconnected. Reason: %d (%s) Remaining Clients: %d", reason, NimBLEUtils::returnCodeToString(reason),
            pServer->getConnectedCount());
@@ -276,8 +278,9 @@ void MyCharacteristicCallbacks::onRead(NimBLECharacteristic* pCharacteristic, Ni
   SS2K_LOG(BLE_SERVER_LOG_TAG, "Read from %s by client: %s", pCharacteristic->getUUID().toString().c_str(), connInfo.getAddress().toString().c_str());
 }
 
-void MyCharacteristicCallbacks::onWrite(NimBLECharacteristic* pCharacteristic, NimBLEConnInfo&) {
+void MyCharacteristicCallbacks::onWrite(NimBLECharacteristic* pCharacteristic, NimBLEConnInfo& connInfo) {
   if (pCharacteristic->getUUID() == FITNESSMACHINECONTROLPOINT_UUID) {
+    ErgFailsafe::noteWrite(ErgFailsafe::BLE, connInfo.getConnHandle(), millis());
     spinBLEServer.writeCache.push(pCharacteristic->getValue());
   } else {
     SS2K_LOG(BLE_SERVER_LOG_TAG, "Write to %s is not supported", pCharacteristic->getUUID().toString().c_str());

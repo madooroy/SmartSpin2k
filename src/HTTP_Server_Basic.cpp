@@ -498,7 +498,12 @@ void updateWifi() {
 
   const IPAddress currentIP = configured ? WiFi.localIP() : WiFi.softAPIP();
   if (currentIP == IPAddress()) return;
-  if (configured) staLastRssi = static_cast<int8_t>(WiFi.RSSI());
+  // Signal for the next disconnect log: sampled every few seconds, not on every maintenance pass (review).
+  static unsigned long lastRssiAt = 0;
+  if (configured && (lastRssiAt == 0 || millis() - lastRssiAt >= 5000)) {
+    staLastRssi = static_cast<int8_t>(WiFi.RSSI());
+    lastRssiAt  = millis();
+  }
   wifiAttempts = 0;
   if (currentIP != myIP) {
     stopNetworkServices();
