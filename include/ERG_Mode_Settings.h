@@ -154,6 +154,10 @@ constexpr double ERG_TABLE_CURVE_BLEND = 0.5;
 constexpr int ERG_STEPPED_HOLD_WATTS = 4;
 // Errors at or above this many watts are corrected without waiting.
 constexpr int ERG_STEPPED_IMMEDIATE_WATTS = 10;
+// Coarse levels: a level worth more than twice ERG_STEPPED_HOLD_WATTS widens the hold band to half a level (never
+// reaching ERG_STEPPED_IMMEDIATE_WATTS) and lets a persistent residual beyond it move the knob a whole level.
+// Steady power is required (|trend| below this, W/s) so a response still arriving is never mistaken for a residual.
+constexpr double ERG_STEPPED_LEVEL_STEADY_WPS = 5.0;  // Bike+ readings wander 2-5 W between 1 Hz reports
 // A moderate error must stay on one side of the target this long before correcting.
 constexpr uint32_t ERG_STEPPED_PERSIST_MS = 1500;
 // Resistance feedback older than this does not enable the hold.

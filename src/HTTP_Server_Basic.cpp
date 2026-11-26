@@ -84,6 +84,9 @@ constexpr char LITTLEFS_PARTITION_LABEL[]    = "spiffs";
 
 bool networkServicesStarted           = false;
 bool stationConnected                 = false;
+// Why the station last dropped (ESP-IDF wifi_err_reason_t, set from the Wi-Fi event task) and its signal just before.
+volatile uint8_t staDisconnectReason  = 0;
+int8_t staLastRssi                    = 0;
 bool clockSyncPending                 = false;
 unsigned long clockSyncStarted        = 0;
 unsigned long lastWifiRetry           = 0;
@@ -333,6 +336,12 @@ bool setNVSRecoveryVersion(const String& v) {
 }  // namespace
 
 void _staSetup() {
+  static bool disconnectEventRegistered = false;
+  if (!disconnectEventRegistered) {
+    WiFi.onEvent([](arduino_event_id_t, arduino_event_info_t info) { staDisconnectReason = info.wifi_sta_disconnected.reason; },
+                 ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
+    disconnectEventRegistered = true;
+  }
   WiFi.setHostname(userConfig->getDeviceName());
   WiFi.mode(WIFI_STA);
   // The core can reconnect continuously for a missing SSID; pace retries here
@@ -377,6 +386,8 @@ void startNetworkServices() {
 
 void logNetworkReady(const char* mode) {
   SS2K_LOG(HTTP_SERVER_LOG_TAG, "%s ready, IP address: %s", mode, myIP.toString().c_str());
+  // Which access point (a mesh unit has its own BSSID), its channel and the signal: a drop after a move shows up here.
+  if (WiFi.getMode() == WIFI_STA) SS2K_LOG(HTTP_SERVER_LOG_TAG, "WiFi access point %s, channel %d, RSSI %d dBm", WiFi.BSSIDstr().c_str(), WiFi.channel(), WiFi.RSSI());
   SS2K_LOG(HTTP_SERVER_LOG_TAG, "Open http://%s.local/", userConfig->getDeviceName());
 }
 }  // namespace
@@ -460,7 +471,9 @@ void updateWifi() {
 
   if (configured && !connected) {
     if (stationConnected) {
-      SS2K_LOGW(HTTP_SERVER_LOG_TAG, "WiFi station disconnected; waiting to reconnect");
+      // Logged at the normal level (UDP logging carries it): the reason tells a weak signal from an access point that
+      // dropped or steered the station (mesh roaming), e.g. 8 = left, 15 = handshake timeout, 200 = beacon timeout.
+      SS2K_LOG(HTTP_SERVER_LOG_TAG, "WiFi station disconnected (reason %u, last RSSI %d dBm); waiting to reconnect", staDisconnectReason, staLastRssi);
       stopNetworkServices();
       stationConnected = false;
       clockSyncPending = false;
@@ -485,6 +498,7 @@ void updateWifi() {
 
   const IPAddress currentIP = configured ? WiFi.localIP() : WiFi.softAPIP();
   if (currentIP == IPAddress()) return;
+  if (configured) staLastRssi = static_cast<int8_t>(WiFi.RSSI());
   wifiAttempts = 0;
   if (currentIP != myIP) {
     stopNetworkServices();

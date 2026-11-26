@@ -95,6 +95,7 @@ class ErgMode {
   // A DECREASING trusted seek that had already reached its table position handed over to PID: for
   // ERG_ARRIVED_HANDOFF_MS after tableSeekHandoffAt, braking on resistance-feedback bikes is bounded (see _inSetpointState).
   bool tableSeekArrivedHandoff           = false;
+  bool tableSeekArrivedClimb             = false;  // the arrived handoff followed a climb (INCREASING seek)
   uint32_t tableSeekHandoffAt            = 0;
   bool feedbackWaiting                   = false;
   // A table move must demonstrate progress before another can interrupt proportional recovery.
@@ -163,6 +164,13 @@ class ErgMode {
   int steppedErrorSign              = 0;
   uint32_t steppedErrorSince        = 0;
   bool _steppedHold(int measuredError);
+  // Coarse resistance levels (Peloton Bike+ at high power): the hold band is half a level's watts, and a residual
+  // beyond it that persists moves the knob a whole level instead of creeping through the level in small PID steps.
+  int levelErrorSign                = 0;
+  uint32_t levelErrorSince          = 0;
+  double _wattsPerLevel(int target, int cadence) const;
+  int _steppedHoldWatts(int target, int cadence) const;
+  bool _steppedLevelStep(int measuredError, int32_t& position);
   bool _hasSteppedFeedback() const;
   // With stepped feedback, recovery drops and repeat climbs are sized at the rider's held cadence (see _heldSeekCadence()).
   // Allocated on the first fresh Grupetto feedback; other bikes never pay for it.
