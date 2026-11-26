@@ -696,7 +696,10 @@ void ErgMode::_stopTrustedTableSeek(const char* reason, bool seedPidFromTable, b
   tableSeekPidSeedPosition = tableSeekPosition;
   // The motor is already at the table's position: watts still changing are the brake catching up with a finished
   // move, not a trend the motor will continue. The next PID update must not amplify that lag (see _inSetpointState).
-  tableSeekArrivedHandoff  = !acquireFeedback && tableSeekState == TableSeekState::SETTLING && mode == Mode::DECREASING;
+  // Both directions: on a climb the same lag reads as a rising trend, and the 1 s forecast backed the knob off a
+  // correct seek (Bike+, Nov 26: 385 W rising toward 395 W moved the knob ~780 steps down; power sagged to 344 W).
+  tableSeekArrivedHandoff  = !acquireFeedback && tableSeekState == TableSeekState::SETTLING && (mode == Mode::DECREASING || mode == Mode::INCREASING);
+  tableSeekArrivedClimb    = tableSeekArrivedHandoff && mode == Mode::INCREASING;
   tableSeekHandoffAt       = millis();
   tableSeekState           = TableSeekState::INACTIVE;
   tableSeekHeldCadence     = false;
@@ -773,10 +776,14 @@ void ErgMode::_handleTrustedTableSeek() {
   }
   if (tableSeekHeldCadence && (targetAmended || cadence * tableSeekHeldDirection >= tableSeekCadence * tableSeekHeldDirection)) {
     tableSeekHeldCadence = false;
-  } else if (tableSeekHeldCadence && tableSeekState == TableSeekState::SETTLING &&
+  } else if (tableSeekHeldCadence && tableSeekHeldDirection > 0 && tableSeekState == TableSeekState::SETTLING &&
              static_cast<uint32_t>(millis()) - tableSeekHeldProgressAt >= ERG_STEPPED_HELD_CADENCE_STALL_MS) {
+    // Only while waiting for the rider to spin UP to the held cadence (a repeat effort, or a recovery after a low-cadence
+    // climb). Coming down from an effort the flywheel needs 4-6 s to spin down: following the still-high cadence after
+    // 2 s took brake off just before cadence fell (Nov 26: 165 W recoveries dipped to 128-150 W).
     tableSeekHeldCadence = false;
-    SS2K_LOG(ERG_MODE_LOG_TAG, "Rider stayed at %drpm (held %drpm); seek follows cadence", cadence, tableSeekCadence);
+    if (abs(cadence - tableSeekCadence) >= ERG_CADENCE_FOLLOW_DEADBAND_RPM)
+      SS2K_LOG(ERG_MODE_LOG_TAG, "Rider stayed at %drpm (held %drpm); seek follows cadence", cadence, tableSeekCadence);
   }
   if (!tableSeekHeldCadence && (targetAmended || abs(cadence - tableSeekCadence) >= ERG_CADENCE_FOLLOW_DEADBAND_RPM)) {
     if (!_tableTargetIsTrusted(tableSeekTargetWatts, cadence)) {
@@ -908,6 +915,13 @@ int32_t ErgMode::_inSetpointState() {
     if (target <= ErgControl::HIGH_GAIN_WATTS) highPowerTransition = false;
     tableCorrectionNeedsProgress = false;
   }
+  int32_t levelPosition = 0;
+  if (_steppedLevelStep(measuredError, levelPosition)) {
+    mode                  = Mode::MAINTAIN;
+    tableSeekPidSeedValid = false;
+    _startFeedbackWait();
+    return levelPosition;
+  }
   if (_steppedHold(measuredError)) return static_cast<int32_t>(rtConfig->getTargetIncline());
   if ((tableCorrectionNeedsProgress || transitionTarget == target) && (measuredError * sustainedTrend <= 0 || abs(measuredError) <= ErgControl::ERG_TRANSIENT_APPROACH_WATTS) &&
       std::abs(sustainedTrend) >= ErgControl::ERG_TRANSIENT_MIN_TREND_WPS) {
@@ -927,11 +941,13 @@ int32_t ErgMode::_inSetpointState() {
     } else if (highPowerTransition || target > ErgControl::HIGH_GAIN_WATTS) {
       error = std::max(-abs(measuredError), std::min(abs(measuredError), projectedError));
     } else if (arrivedHandoff) {
-      // Resistance-feedback bikes (e.g. Peloton Bike+): after an arrived decreasing trusted seek the brake responds late
-      // and then steeply, so the 1 s forecast overshoots. Braking may reverse direction but not exceed the measured
+      // Resistance-feedback bikes (e.g. Peloton Bike+): after an arrived trusted seek (either direction) the brake
+      // responds late and then steeply, so the 1 s forecast overshoots. Braking may reverse direction but not exceed the measured
       // residual. Checked before the high-request branch, which is otherwise true after every seek once a >400 W
       // target has been seen.
       error = std::max(-abs(measuredError), std::min(abs(measuredError), projectedError));
+      // After a climb, never reverse while power is still below the target: the knob is already where the table put it.
+      if (tableSeekArrivedClimb && measuredError > 0) error = std::max(error, 0);
     } else if (hasHighPowerRequest && boundedSeekTransition) {
       const double sensitivity = ErgControl::sanitizeSensitivity(userConfig->getERGSensitivity());
       const double predictionScale = std::min(1.0, ERG_SENSITIVITY / sensitivity);
@@ -1101,7 +1117,8 @@ int ErgMode::_heldSeekCadence(int target, int cadence, const char*& source) {
   const int previous   = prevWatts.getTarget();
   if (cadenceHistory == nullptr || !_hasSteppedFeedback() || previous <= 0) return cadence;
   if (target > previous) return _climbSeekCadence(target, cadence, source);
-  if (target == previous || rtConfig->watts.getValue() <= target) return cadence;
+  // A shift down or a small ramp step is not a recovery from an effort: size it at the rider's cadence.
+  if (target == previous || rtConfig->watts.getValue() <= target || previous - target <= ERG_TABLE_CORRECTION_WATTS) return cadence;
   const uint32_t now = millis();
   int remembered     = cadenceHistory->cadenceAt(target, now);
   source             = "held";
@@ -1147,6 +1164,57 @@ int ErgMode::_climbSeekCadence(int target, int cadence, const char*& source) {
   return chosen;
 }
 
+// Watts between neighbouring resistance levels at this target and cadence: knob steps per level from the FTMS
+// calibration map around the reported level, over the power table's local steps per watt. 0 when either is unknown.
+double ErgMode::_wattsPerLevel(int target, int cadence) const {
+  const auto& map = powerTable->ftmsCalibration;
+  const int level = rtConfig->resistance.getValue();
+  int32_t here = 0, next = 0, uncertainty = 0;
+  if (!map.valid() || level <= 0 || !map.estimateHalf(2 * level, here, uncertainty) || !map.estimateHalf(2 * level + 2, next, uncertainty)) return 0;
+  double stepsPerWatt = 0;
+  PowerTableSlopeStatus::Value status;
+  if (!powerTable->lookupErgSlope(target, cadence, stepsPerWatt, &status) || !(stepsPerWatt > 0)) return 0;
+  return std::abs(static_cast<double>(next) - here) / stepsPerWatt;
+}
+
+// Half a level's watts where levels are coarse, else ERG_STEPPED_HOLD_WATTS (fine levels and unknown maps unchanged).
+int ErgMode::_steppedHoldWatts(int target, int cadence) const {
+  const double half = _wattsPerLevel(target, cadence) / 2.0;
+  if (half <= ERG_STEPPED_HOLD_WATTS) return ERG_STEPPED_HOLD_WATTS;
+  return std::min(ERG_STEPPED_IMMEDIATE_WATTS - 1, static_cast<int>(std::lround(half)));
+}
+
+// A residual beyond half a coarse level that has persisted for ERG_STEPPED_PERSIST_MS with steady power: move the
+// knob to the middle of the neighbouring level toward the target, then wait for the power response. Small PID steps
+// inside a level change nothing on such a brake (Nov 26: 373-382 W for 4-14 s at a 395 W target, one level low).
+bool ErgMode::_steppedLevelStep(int measuredError, int32_t& position) {
+  const int target  = rtConfig->watts.getTarget();
+  const int cadence = rtConfig->cad.getValue();
+  const int band    = _steppedHoldWatts(target, cadence);
+  if (!_hasSteppedFeedback() || band <= ERG_STEPPED_HOLD_WATTS || transitionTarget != INT32_MIN || tableCorrectionNeedsProgress || isTableSeeking() ||
+      abs(measuredError) <= band || std::abs(responseTrend) >= ERG_STEPPED_LEVEL_STEADY_WPS) {
+    levelErrorSign = 0;
+    return false;
+  }
+  const int sign     = measuredError > 0 ? 1 : -1;
+  const uint32_t now = millis();
+  if (sign != levelErrorSign) {
+    levelErrorSign  = sign;
+    levelErrorSince = now;
+  }
+  // Like the stepped hold: a residual of ERG_STEPPED_IMMEDIATE_WATTS or more moves at once, a smaller one must persist.
+  if (abs(measuredError) < ERG_STEPPED_IMMEDIATE_WATTS && now - levelErrorSince < ERG_STEPPED_PERSIST_MS) return false;
+  const int level = rtConfig->resistance.getValue();
+  int32_t center = 0, uncertainty = 0;
+  if (!powerTable->ftmsCalibration.estimateHalf(2 * (level + sign), center, uncertainty)) return false;
+  center = std::max(rtConfig->getMinStep(), std::min(rtConfig->getMaxStep(), center));
+  if ((static_cast<int64_t>(center) - ss2k->getCurrentPosition()) * sign <= 0) return false;   // already past it: PID owns it
+  levelErrorSign = 0;
+  SS2K_LOG(ERG_MODE_LOG_TAG, "Level step: %dw -> %dw, resistance %d -> %d, position %d", rtConfig->watts.getValue(), target, level, level + sign, center);
+  position = center;
+  return true;
+}
+
 bool ErgMode::_steppedHold(int measuredError) {
   // Only bikes reporting real resistance levels through Grupetto qualify (see _hasSteppedFeedback()).
   const bool stepped = _hasSteppedFeedback();
@@ -1155,7 +1223,7 @@ bool ErgMode::_steppedHold(int measuredError) {
     steppedErrorSign = 0;
     return false;
   }
-  if (abs(measuredError) <= ERG_STEPPED_HOLD_WATTS) {
+  if (abs(measuredError) <= _steppedHoldWatts(rtConfig->watts.getTarget(), rtConfig->cad.getValue())) {
     steppedErrorSign = 0;
     return true;
   }

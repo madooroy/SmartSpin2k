@@ -27,6 +27,7 @@
 #include "BLE_OpenBikeControl_Service.h"
 #include "DirConManager.h"
 #include "ThermalSafety.h"
+#include "ErgFailsafe.h"
 
 // Peloton Serial
 HardwareSerial auxSerial(1);
@@ -342,6 +343,16 @@ void SS2K::maintenanceLoop(void*) {
       // 500ms
       if ((millis() - bleTimer) > BLE_NOTIFY_DELAY) {
         BLECommunications();
+        // ERG left holding a target after its app disappeared (Wi-Fi drop, app crash): ease to the recent recovery.
+        static ErgFailsafe::State ergFailsafe;
+        const int controllers = spinBLEServer.connectedClientCount() + DirConManager::connectedClients();
+        const int eased       = ErgFailsafe::update(ergFailsafe, rtConfig->getFTMSMode() == FitnessMachineControlPointProcedure::SetTargetPower,
+                                                    rtConfig->watts.getTarget(), controllers, millis());
+        if (eased > 0) {
+          SS2K_LOG(MAIN_LOG_TAG, "No app connected for %lu ms in ERG: easing target %d -> %d W", static_cast<unsigned long>(ErgFailsafe::GRACE_MS),
+                   rtConfig->watts.getTarget(), eased);
+          rtConfig->watts.setTarget(eased);
+        }
         logHandler.writeLogs();
         webSocketAppender.Loop();
         bleTimer = millis();

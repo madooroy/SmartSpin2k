@@ -58,8 +58,10 @@ struct { int spinDownFlag=0; } spinBLEServer;
 struct { void remove(const char*) {} } LittleFS;
 void PowerBuffer::reset() { for(auto& entry:powerEntry) entry.readings=0; }
 int PowerBuffer::getReadings() { int n=0; for(const auto& entry:powerEntry) n+=entry.readings!=0; return n; }
+#include "FtmsCalibration.h"
 struct PowerTable {
   PTData ptData;
+  FtmsCalibration::Map ftmsCalibration;
   uint32_t positionEpoch=0;
   PTHelpers helpers;
   bool surface=false, sloped=false, failHighCadence=false, realSlope=false;
@@ -739,6 +741,74 @@ int main(int argc,char** argv) {
       assert(table.saves==1 && spinBLEServer.spinDownFlag==0);
     }
     writeRow(3,321); assert(spinBLEServer.spinDownFlag==1); // New upload homes again.
+  } else if(scenario=="stepped_level_step") {
+    // Nov 26 (Bike+ 395 W efforts): power sat one coarse level low (373-382 W) for 4-14 s while PID crept through the
+    // level. With coarse levels (calibration map: 150 steps/level, table ~12 steps/W, so ~12.5 W/level, band 6 W)
+    // a steady residual beyond half a level moves the knob to the middle of the next level. Run 0: no map. Run 1:
+    // coarse, -12 W steady -> immediate level step; then +5 W (inside the 6 W band) is held, not corrected.
+    // Run 2: coarse, -8 W steady -> level step only after ERG_STEPPED_PERSIST_MS. Run 3: fine levels (40 steps/level,
+    // ~3 W/level): never a level step, band stays 4 W.
+    for(int run=0;run<4;++run) {
+      const uint32_t o=1000000u*run;
+      logs.clear(); controller.resetTableConfidence(); controller.prepareMode();
+      table.ftmsCalibration=FtmsCalibration::Map{};
+      trainTrustedLow(5,240);
+      table.realSlope=true;
+      const int here=table.lookup(240,85);
+      if(run>0) {
+        const int perLevel=run==3?40:150;
+        auto& m=table.ftmsCalibration; m.source=1; m.maximum=24482;
+        m.position[1]=here+perLevel/2; m.position[0]=m.position[1]-perLevel*35/2; m.position[2]=m.position[1]+perLevel*33/2;
+        assert(m.valid());
+      }
+      motor.current=motor.target=here; rtConfig->setTargetIncline(here);
+      const int watts=run==2?232:228;
+      auto st=[&](uint32_t t,int w){ clockMs=o+t; rtConfig->resistance.setValue(50,false); step(o+t,w); };
+      st(40000,watts); st(41000,watts);
+      bool stepped=logged("Level step");
+      if(run==2) { assert(!stepped); st(42000,watts); st(43000,watts); stepped=logged("Level step"); }
+      int32_t center=0, unc=0;
+      if(run==1||run==2) {
+        assert(stepped && logged("resistance 50 -> 51"));
+        table.ftmsCalibration.estimateHalf(102,center,unc);
+        printf("stepped_level_step run %d: level step to %d (level 51 centre %d, start %d)\n",run,(int)rtConfig->getTargetIncline(),center,here); fflush(stdout);
+        assert(static_cast<int>(rtConfig->getTargetIncline())==center);
+      } else {
+        assert(!stepped);
+        printf("stepped_level_step run %d: no level step\n",run); fflush(stdout);
+      }
+      if(run==1) {
+        // Power arrives at the target, then sits +5 W: inside the half-level band, held without a move.
+        motor.current=motor.target=center;
+        for(uint32_t t=44000;t<=47000;t+=1000) st(t,240);
+        const int held=rtConfig->getTargetIncline(); logs.clear();
+        for(uint32_t t=48000;t<=52000;t+=1000) st(t,245);
+        printf("stepped_level_step run 1: +5 W held %d -> %d\n",held,(int)rtConfig->getTargetIncline()); fflush(stdout);
+        assert(static_cast<int>(rtConfig->getTargetIncline())==held && !logged("Level step"));
+      }
+      rtConfig->resistance.setValue(0,true);
+    }
+    table.ftmsCalibration=FtmsCalibration::Map{}; table.realSlope=false;
+    return 0;
+  } else if(scenario.find("seek_arrived_stepped_increasing_")==0) {
+    // Nov 26 (Bike+, 395 W efforts): an INCREASING trusted seek that arrived and handed over on "power trend crossed
+    // target" with power still rising (+10 W residual, +40 W/s) must not let the 1 s forecast back the knob off:
+    // the move is bounded to the measured residual, so it is upward and at most the +10 W residual's move.
+    const int sensitivity=std::stoi(scenario.substr(scenario.find_last_of('_')+1));
+    trainTrustedLow(sensitivity,100);
+    auto st=[&](uint32_t t,int w,bool fresh=true){ clockMs=t; rtConfig->resistance.setValue(45,false); step(t,w,fresh); };
+    rtConfig->watts.setTarget(240); st(27000,100);
+    assert(controller.isTableSeeking());
+    const int seek=rtConfig->getTargetIncline();
+    st(27200,100,false); st(28000,150); st(29000,190);
+    assert(controller.isTableSeeking() && rtConfig->getTargetIncline()==seek);
+    st(30000,230);
+    assert(!controller.isTableSeeking() && logged("power trend crossed target"));
+    const int move=static_cast<int>(rtConfig->getTargetIncline())-motor.current;
+    const int expected=sensitivity==3?36:sensitivity==5?60:120;
+    printf("%s: stepped arrived climb handoff move %d (bound %d)\n",scenario.c_str(),move,expected); fflush(stdout);
+    assert(move>=0 && move<=expected);
+    return 0;
   } else if(scenario.find("seek_arrived_stepped_")==0) {
     // #784: with fresh Grupetto resistance feedback, a DECREASING trusted seek that arrived and handed over on
     // "power trend crossed target" bounds braking to the measured residual (-10 W residual, -50 W/s trend:
@@ -1378,6 +1448,32 @@ int main(int argc,char** argv) {
       }
     }
     printf("stepped_drop_cadence: drop without %d, held %d, floored %d, after low-cadence climb %d\n",drop[0],drop[1],drop[2],drop[3]); fflush(stdout);
+  } else if(scenario=="stepped_drop_spin_down" || scenario=="stepped_shift_down") {
+    // Nov 26: after a recovery drop sized at the held cadence, a rider still spinning fast 2 s later must not make the
+    // seek follow the high cadence (it took the brake off just before cadence fell; recoveries dipped to 128-150 W).
+    // A shift down (-20 W, two presses) is not a recovery and is sized at the rider's current cadence.
+    const bool shift=scenario=="stepped_shift_down";
+    setup(155,155); userConfig->setERGSensitivity(3);
+    table.sloped=true; table.cadenceSlope=-100; table.lookupResult=motor.current-500;
+    auto feed=[&](uint32_t t){ clockMs=t; rtConfig->resistance.setValue(40,false); };
+    rtConfig->cad.setValue(89);
+    for(uint32_t t=1000;t<=61000;t+=1000) { feed(t); step(t,155); }
+    assert(logged("now trusted"));
+    rtConfig->cad.setValue(97); rtConfig->watts.setTarget(300);
+    for(uint32_t t=62000;t<=92000;t+=1000) { feed(t); step(t,t==62000?155:300); }
+    assert(!controller.isTableSeeking());
+    logs.clear();
+    rtConfig->watts.setTarget(shift?280:155); feed(93000); step(93000,300,false);
+    if(shift) {
+      assert(!logged("Recovery drop sized"));
+      printf("stepped_shift_down: sized at the current cadence\n"); fflush(stdout);
+      return 0;
+    }
+    assert(logged("Recovery drop sized at held cadence 89rpm (rider now 97rpm)") && controller.isTableSeeking());
+    const int drop=rtConfig->getTargetIncline();
+    for(uint32_t t=93500;t<=97000;t+=500) { feed(t); step(t,240); if(!controller.isTableSeeking()) break; }
+    printf("stepped_drop_spin_down: drop %d, after 4 s at 97 rpm %d\n",drop,(int)rtConfig->getTargetIncline()); fflush(stdout);
+    assert(!logged("Rider stayed at"));
   } else if(scenario=="stepped_climb_cadence") {
     // With fresh Grupetto feedback a climb back to a target already held (repeat efforts) is sized at the cadence held
     // there: riders spin up into the effort during the countdown. Recovery 155 W at 89 rpm, efforts 300 W at 102 rpm.
@@ -2119,6 +2215,19 @@ class TestErgFeedback(unittest.TestCase):
             for kind in ("", "twohop_"):
                 with self.subTest(sensitivity=sensitivity, kind=kind):
                     subprocess.run([str(self.exe), f"seek_arrived_stepped_{kind}{sensitivity}"], check=True)
+
+    def test_stepped_drop_waits_for_spin_down(self):
+        for scenario in ("stepped_drop_spin_down", "stepped_shift_down"):
+            with self.subTest(scenario=scenario):
+                subprocess.run([str(self.exe), scenario], check=True)
+
+    def test_stepped_level_step(self):
+        subprocess.run([str(self.exe), "stepped_level_step"], check=True)
+
+    def test_stepped_arrived_climb_bounds_braking(self):
+        for sensitivity in (3, 5, 10):
+            with self.subTest(sensitivity=sensitivity):
+                subprocess.run([str(self.exe), f"seek_arrived_stepped_increasing_{sensitivity}"], check=True)
 
     def test_amended_trusted_seek_retains_predictive_guard(self):
         for scenario in ("seek_amended_no", "seek_amended_yes", "seek_amended_nine"):
