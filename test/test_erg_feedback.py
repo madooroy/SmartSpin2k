@@ -791,6 +791,26 @@ int main(int argc,char** argv) {
     }
     table.ftmsCalibration=FtmsCalibration::Map{}; table.realSlope=false;
     return 0;
+  } else if(scenario=="stepped_level_ramp") {
+    // Bike+ replay, Nov 25 ramp: a level step in a ramp started a feedback wait that held the knob ~5 s while the
+    // target moved on. Coarse map as in stepped_level_step run 1; the target rises 3 W every second, power 12 W short.
+    logs.clear(); controller.resetTableConfidence(); controller.prepareMode();
+    trainTrustedLow(5,240);
+    table.realSlope=true;
+    const int here=table.lookup(240,85);
+    auto& m=table.ftmsCalibration; m=FtmsCalibration::Map{}; m.source=1; m.maximum=24482;
+    m.position[1]=here+75; m.position[0]=m.position[1]-150*35/2; m.position[2]=m.position[1]+150*33/2;
+    assert(m.valid());
+    motor.current=motor.target=here; rtConfig->setTargetIncline(here);
+    for(uint32_t t=40000;t<=50000;t+=1000) {
+      const int target=243+static_cast<int>((t-40000)/1000)*3;   // a new target every second from the first
+      rtConfig->watts.setTarget(target);
+      clockMs=t; rtConfig->resistance.setValue(50,false); step(t,target-12);
+    }
+    printf("stepped_level_ramp: level step in a ramp: %s\n",logged("Level step")?"yes":"no"); fflush(stdout);
+    assert(!logged("Level step"));
+    table.ftmsCalibration=FtmsCalibration::Map{}; table.realSlope=false;
+    return 0;
   } else if(scenario.find("seek_arrived_stepped_increasing_")==0) {
     // Nov 26 (Bike+, 395 W efforts): an INCREASING trusted seek that arrived and handed over on "power trend crossed
     // target" with power still rising (+10 W residual, +40 W/s) must not let the 1 s forecast back the knob off:
@@ -2209,6 +2229,9 @@ class TestErgFeedback(unittest.TestCase):
         for scenario in ("stepped_drop_spin_down", "stepped_shift_down"):
             with self.subTest(scenario=scenario):
                 subprocess.run([str(self.exe), scenario], check=True)
+
+    def test_stepped_level_ramp(self):
+        subprocess.run([str(self.exe), "stepped_level_ramp"], check=True)
 
     def test_stepped_level_step(self):
         subprocess.run([str(self.exe), "stepped_level_step"], check=True)

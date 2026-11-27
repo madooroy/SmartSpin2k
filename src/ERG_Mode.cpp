@@ -1197,6 +1197,17 @@ int ErgMode::_steppedHoldWatts(int target, int cadence) const {
 bool ErgMode::_steppedLevelStep(int measuredError, int32_t& position) {
   const int target  = rtConfig->watts.getTarget();
   const int cadence = rtConfig->cad.getValue();
+  // Only on a target that has held still for ERG_STEPPED_PERSIST_MS: in a ramp (a new target every second) the feedback
+  // wait after a level step froze the knob for ~5 s while the target moved on (Bike+ replay of a Nov 25 ramp).
+  const uint32_t nowMs = millis();
+  if (target != levelTarget) {
+    levelTarget      = target;
+    levelTargetSince = nowMs;
+  }
+  if (nowMs - levelTargetSince < ERG_STEPPED_PERSIST_MS) {
+    levelErrorSign = 0;
+    return false;
+  }
   const int band    = _steppedHoldWatts(target, cadence);
   // Step only past half a level (uncapped, unlike the hold band): a one-level move then always lands closer to the
   // target, so it cannot bounce between two levels when a level is worth 20 W or more (review).

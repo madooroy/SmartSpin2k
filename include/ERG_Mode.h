@@ -168,6 +168,8 @@ class ErgMode {
   // beyond it that persists moves the knob a whole level instead of creeping through the level in small PID steps.
   int levelErrorSign                = 0;
   uint32_t levelErrorSince          = 0;
+  int levelTarget                   = 0;  // the target the level step last saw, and since when: never during a ramp
+  uint32_t levelTargetSince         = 0;
   double _wattsPerLevel(int target, int cadence) const;
   int _steppedHoldWatts(int target, int cadence) const;
   bool _steppedLevelStep(int measuredError, int32_t& position);
