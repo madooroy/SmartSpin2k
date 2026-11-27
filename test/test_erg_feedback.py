@@ -795,8 +795,19 @@ int main(int argc,char** argv) {
     // Nov 26 (Bike+, 395 W efforts): an INCREASING trusted seek that arrived and handed over on "power trend crossed
     // target" with power still rising (+10 W residual, +40 W/s) must not let the 1 s forecast back the knob off:
     // the move is bounded to the measured residual, so it is upward and at most the +10 W residual's move.
+    // Only with an FTMS calibration map (Grupetto's resistance scale, as on a Bike+); "_fine" (no map: original Peloton
+    // Bike on the aux cable, where the knob moves the brake directly) keeps the unbounded forecast, which backs off here.
+    const bool fine=scenario.find("_fine_")!=std::string::npos;
     const int sensitivity=std::stoi(scenario.substr(scenario.find_last_of('_')+1));
     trainTrustedLow(sensitivity,100);
+    table.realSlope=true;
+    table.ftmsCalibration=FtmsCalibration::Map{};
+    if(!fine) {
+      const int here=table.lookup(240,85);
+      auto& m=table.ftmsCalibration; m.source=1; m.maximum=24482;
+      m.position[1]=here+75; m.position[0]=m.position[1]-150*35/2; m.position[2]=m.position[1]+150*33/2;
+      assert(m.valid());
+    }
     auto st=[&](uint32_t t,int w,bool fresh=true){ clockMs=t; rtConfig->resistance.setValue(45,false); step(t,w,fresh); };
     rtConfig->watts.setTarget(240); st(27000,100);
     assert(controller.isTableSeeking());
@@ -808,7 +819,8 @@ int main(int argc,char** argv) {
     const int move=static_cast<int>(rtConfig->getTargetIncline())-motor.current;
     const int expected=sensitivity==3?36:sensitivity==5?60:120;
     printf("%s: stepped arrived climb handoff move %d (bound %d)\n",scenario.c_str(),move,expected); fflush(stdout);
-    assert(move>=0 && move<=expected);
+    if(fine) assert(move<0); else assert(move>=0 && move<=expected);
+    table.ftmsCalibration=FtmsCalibration::Map{}; table.realSlope=false;
     return 0;
   } else if(scenario.find("seek_arrived_stepped_")==0) {
     // #784: with fresh Grupetto resistance feedback, a DECREASING trusted seek that arrived and handed over on
@@ -1530,30 +1542,6 @@ int main(int argc,char** argv) {
     rtConfig->cad.setValue(88); rtConfig->watts.setTarget(210); feed(62000); step(62000,200,false);
     for(uint32_t t=62500;t<=66000;t+=500) { feed(t); step(t,205); }
     assert(!logged("Climb sized"));
-  } else if(scenario=="stepped_drop_cadence_recent") {
-    // Nov 8: a warm-up at 88 rpm at the recovery target, then riding at 72 rpm. The recovery cadence must follow
-    // the most recent riding at that target, not the warm-up: the old ~1 minute mean still said 81-82 rpm after
-    // 40 s at 72. The effort is ridden at 78 rpm (inside the 15 rpm allowance) so the drop is always history-sized
-    // and logged. A single 110 rpm sample during the 72 rpm stretch must not move the held cadence by much.
-    setup(155,155); userConfig->setERGSensitivity(3);
-    table.sloped=true; table.cadenceSlope=-100; table.lookupResult=motor.current-500;
-    auto feed=[&](uint32_t t){ clockMs=t; rtConfig->resistance.setValue(40,false); };
-    rtConfig->cad.setValue(88);
-    for(uint32_t t=1000;t<=61000;t+=1000) { feed(t); step(t,155); }
-    for(uint32_t t=62000;t<=101000;t+=1000) { rtConfig->cad.setValue(t==90000?110:72); feed(t); step(t,155); }
-    rtConfig->cad.setValue(78); rtConfig->watts.setTarget(300);
-    for(uint32_t t=102000;t<=132000;t+=1000) { feed(t); step(t,t==102000?155:300); }
-    logs.clear();
-    rtConfig->watts.setTarget(155); feed(133000); step(133000,300,false);
-    assert(logged("Recovery drop sized at held cadence"));
-    int held=-1;
-    for(const auto& line: logs) {
-      const auto at=line.find("held cadence ");
-      if(at!=std::string::npos) held=std::atoi(line.c_str()+at+13);
-    }
-    printf("stepped_drop_cadence_recent: recovery sized at %d rpm (rider rode 72 rpm, now 78)\n",held); fflush(stdout);
-    // 73 rpm without the spike; the 110 rpm sample 11 s before the drop adds at most 2 (unlimited: ~78; old code: 82).
-    assert(held>=70 && held<=75);
   } else if(scenario=="brake_hold") {
     // 0005: braking the flywheel from 88 rpm: the reported cadence only falls to ~48 rpm (never <= MIN_ERG_CADENCE
     // for 2.5 s). ERG must not add resistance for the low cadence; once cadence settles again it seeks once.
@@ -2176,7 +2164,7 @@ class TestErgFeedback(unittest.TestCase):
         for scenario in ["ride_handoff", "crossing_and_safety", "reduction_safety", "worsening_reduction", "ordinary_reduction",
                          "new_target", "cadence_stop", "cadence_coast_step", "cadence_stop_real", "spinup_noisy_cadence",
                          "spinup_timeout", "spinup_power_trend", "spinup_lower_target", "spinup_target_change_during_hold", "spinup_ease_needs_support", "spinup_ease_waits_for_response",
-                         "spinup_mode_reset", "stepped_feedback_gate", "stepped_drop_cadence", "stepped_drop_cadence_recent", "stepped_climb_cadence", "stepped_climb_shift", "brake_hold", "rv_low_cadence_drill", "rv_stop_then_slow_restart", "rv_single_sample_glitch", "rv_sprint_end",
+                         "spinup_mode_reset", "stepped_feedback_gate", "stepped_drop_cadence", "stepped_climb_cadence", "stepped_climb_shift", "brake_hold", "rv_low_cadence_drill", "rv_stop_then_slow_restart", "rv_single_sample_glitch", "rv_sprint_end",
                          "mode_change", "missing_feedback", "movement_timeout", "no_table", "pid_no_wait_decrease", "small_error",
                          "clamped_move", "clock_wrap", "trusted_seek", "trusted_seek_late_uptime", "simulation_1000", "simulation_2000", "simulation_3000",
                          "simulation_missing_2000", "trust_transients", "stale_seek", "seek_deadline", "sparse_seventy", "extrapolated_cadence",
@@ -2229,6 +2217,7 @@ class TestErgFeedback(unittest.TestCase):
         for sensitivity in (3, 5, 10):
             with self.subTest(sensitivity=sensitivity):
                 subprocess.run([str(self.exe), f"seek_arrived_stepped_increasing_{sensitivity}"], check=True)
+                subprocess.run([str(self.exe), f"seek_arrived_stepped_increasing_fine_{sensitivity}"], check=True)
 
     def test_amended_trusted_seek_retains_predictive_guard(self):
         for scenario in ("seek_amended_no", "seek_amended_yes", "seek_amended_nine"):

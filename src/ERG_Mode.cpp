@@ -698,7 +698,12 @@ void ErgMode::_stopTrustedTableSeek(const char* reason, bool seedPidFromTable, b
   // move, not a trend the motor will continue. The next PID update must not amplify that lag (see _inSetpointState).
   // Both directions: on a climb the same lag reads as a rising trend, and the 1 s forecast backed the knob off a
   // correct seek (Bike+, Nov 26: 385 W rising toward 395 W moved the knob ~780 steps down; power sagged to 344 W).
-  tableSeekArrivedHandoff  = !acquireFeedback && tableSeekState == TableSeekState::SETTLING && (mode == Mode::DECREASING || mode == Mode::INCREASING);
+  // Climbs only on bikes calibrated on Grupetto's resistance scale (FTMS calibration map, e.g. Peloton Bike+): there
+  // power still rising after the knob arrives is the bike's own brake catching up. Where the knob moves the brake
+  // directly (original Peloton Bike on the aux cable), rising power after a climb can be the rider speeding up, and the
+  // forecast is right to back off (simulator: +17 W overshoot with the bound there).
+  const bool calibratedClimb = mode == Mode::INCREASING && powerTable->ftmsCalibration.valid();
+  tableSeekArrivedHandoff  = !acquireFeedback && tableSeekState == TableSeekState::SETTLING && (mode == Mode::DECREASING || calibratedClimb);
   tableSeekArrivedClimb    = tableSeekArrivedHandoff && mode == Mode::INCREASING;
   tableSeekHandoffAt       = millis();
   tableSeekState           = TableSeekState::INACTIVE;
